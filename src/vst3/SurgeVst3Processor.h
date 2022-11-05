@@ -3,9 +3,11 @@
 #include "public.sdk/source/vst/vstsinglecomponenteffect.h"
 #include "public.sdk/source/vst/vsteditcontroller.h"
 #include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include <util/FpuState.h>
 #include <memory>
 #include <set>
+#include <map>
 
 using namespace Steinberg;
 
@@ -103,10 +105,6 @@ public:
                                Steinberg::Vst::CtrlNumber midiControllerNumber,
                                Steinberg::Vst::ParamID& id /*out*/) override;
 
-   //! when true, surge exports all normal 128 CC parameters, aftertouch and pitch bend as
-   //! parameters (but not automatable)
-   bool exportAllMidiControllers();
-
    void updateDisplay();
    void setParameterAutomated(int externalparam, float value);
 
@@ -118,10 +116,10 @@ public:
                                Steinberg::Vst::ParamValue valueNormalized);
    virtual tresult endEdit(Steinberg::Vst::ParamID id);
 #else
-   virtual tresult PLUGIN_API beginEdit(Steinberg::Vst::ParamID id);
+   virtual tresult PLUGIN_API beginEdit(Steinberg::Vst::ParamID id) override;
    virtual tresult PLUGIN_API performEdit(Steinberg::Vst::ParamID id,
-                               Steinberg::Vst::ParamValue valueNormalized);
-   virtual tresult PLUGIN_API endEdit(Steinberg::Vst::ParamID id);
+                               Steinberg::Vst::ParamValue valueNormalized) override;
+   virtual tresult PLUGIN_API endEdit(Steinberg::Vst::ParamID id) override;
 #endif
     
 protected:
@@ -135,13 +133,19 @@ protected:
 
    std::unique_ptr<SurgeSynthesizer> surgeInstance;
    std::set<SurgeGUIEditor*> viewsSet;
+   std::map<int, int> beginEditGuard;
    int blockpos;
 
    bool disableZoom;
+   bool haveZoomed = false;
+   int lastZoom = -1;
    void handleZoom(SurgeGUIEditor *e);
    
    FpuState _fpuState;
 
+   int midi_controller_0, midi_controller_max;
+   const int n_midi_controller_params = 16 * (Steinberg::Vst::ControllerNumbers::kCountCtrlNumber);
+   
 public:
    OBJ_METHODS(SurgeVst3Processor, Steinberg::Vst::SingleComponentEffect)
    DEFINE_INTERFACES

@@ -1,6 +1,18 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #include "Oscillator.h"
 #include "DspUtilities.h"
 
@@ -84,7 +96,7 @@ void WavetableOscillator::init(float pitch, bool is_display)
             s = 0.f; //(oscdata->startphase.val.f) * (float)oscdata->wt.size;
          else if (!is_display)
          {
-            float drand = (float)rand() / RAND_MAX;
+            float drand = (float)rand() / (float)RAND_MAX;
             oscstate[i] = drand; // * (float)oscdata->wt.size;
          }
 
@@ -101,18 +113,20 @@ void WavetableOscillator::init(float pitch, bool is_display)
 void WavetableOscillator::init_ctrltypes()
 {
    oscdata->p[0].set_name("Morph");
-   oscdata->p[0].set_type(ct_percent);
-   oscdata->p[1].set_name("Skew V");
+   oscdata->p[0].set_type(ct_countedset_percent);
+   oscdata->p[0].set_user_data(oscdata);
+
+   oscdata->p[1].set_name("Skew Vertical");
    oscdata->p[1].set_type(ct_percent_bidirectional);
    oscdata->p[2].set_name("Saturate");
    oscdata->p[2].set_type(ct_percent);
    oscdata->p[3].set_name("Formant");
    oscdata->p[3].set_type(ct_syncpitch);
-   oscdata->p[4].set_name("Skew H");
+   oscdata->p[4].set_name("Skew Horizontal");
    oscdata->p[4].set_type(ct_percent_bidirectional);
-   oscdata->p[5].set_name("Uni Spread");
+   oscdata->p[5].set_name("Unison Detune");
    oscdata->p[5].set_type(ct_oscspread);
-   oscdata->p[6].set_name("Uni Count");
+   oscdata->p[6].set_name("Unison Voices");
    oscdata->p[6].set_type(ct_osccountWT);
 }
 void WavetableOscillator::init_default_values()
@@ -145,7 +159,7 @@ void WavetableOscillator::convolute(int voice, bool FM, bool stereo)
 
    double detune = drift * driftlfo[voice];
    if (n_unison > 1)
-      detune += localcopy[id_detune].f * (detune_bias * float(voice) + detune_offset);
+      detune += oscdata->p[5].get_extended(localcopy[id_detune].f) * (detune_bias * float(voice) + detune_offset);
 
    // int ipos = (large+oscstate[voice])>>16;
    const float p24 = (1 << 24);
@@ -226,9 +240,13 @@ void WavetableOscillator::convolute(int voice, bool FM, bool stereo)
    // add time until next statechange
    float tempt;
    if (oscdata->p[5].absolute)
-      tempt = note_to_pitch_inv(detune * pitchmult_inv * (1.f / 440.f));
+   {
+      // See the comment in SurgeSuperOscillator.cpp at the absolute treatment
+      tempt = storage->note_to_pitch_inv_ignoring_tuning( detune * storage->note_to_pitch_inv_ignoring_tuning( pitch_t ) * 16 / 0.9443 );
+      if( tempt < 0.1 ) tempt = 0.1;
+   }
    else
-      tempt = note_to_pitch_inv(detune);
+      tempt = storage->note_to_pitch_inv_tuningctr(detune);
    float t;
    float xt = ((float)state[voice] + 0.5f) * dt;
    // xt = (1 - hskew + 2*hskew*xt);
@@ -244,7 +262,7 @@ void WavetableOscillator::convolute(int voice, bool FM, bool stereo)
            t = dt * tempt * wt_inc;
    }	*/
    float ft = block_pos * formant_t + (1.f - block_pos) * formant_last;
-   float formant = note_to_pitch(-ft);
+   float formant = storage->note_to_pitch_tuningctr(-ft);
    dt *= formant * xt;
 
    // if(state[voice] >= (oscdata->wt.size-wt_inc)) dt += (1-formant);
@@ -332,7 +350,7 @@ template <bool is_init> void WavetableOscillator::update_lagvals()
    l_shape.newValue(limit_range(localcopy[id_shape].f, 0.f, 1.f));
    formant_t = max(0.f, localcopy[id_formant].f);
 
-   float invt = min(1.0, (8.175798915 * note_to_pitch(pitch_t)) * dsamplerate_os_inv);
+   float invt = min(1.0, (8.175798915 * storage->note_to_pitch_tuningctr(pitch_t)) * dsamplerate_os_inv);
    float hpf2 = min(integrator_hpf, powf(hpf_cycle_loss, 4 * invt)); // TODO Make a lookup table
 
    hpf_coeff.newValue(hpf2);
@@ -358,7 +376,8 @@ void WavetableOscillator::process_block(
 {
    pitch_last = pitch_t;
    pitch_t = min(148.f, pitch0);
-   pitchmult_inv = max(1.0, dsamplerate_os * (1 / 8.175798915) * note_to_pitch_inv(pitch_t));
+   pitchmult_inv =
+       max(1.0, dsamplerate_os * (1 / 8.175798915) * storage->note_to_pitch_inv(pitch_t));
    pitchmult = 1.f / pitchmult_inv; // This must be a real division, reciprocal-approximation is not
                                     // precise enough
    this->drift = drift;

@@ -5,7 +5,10 @@
 #include "ModulationSource.h"
 #include "CScalableBitmap.h"
 #include "SurgeBitmaps.h"
+#include "SurgeStorage.h"
+#include <UserDefaults.h>
 #include <vt_dsp/basic_dsp.h>
+#include <iostream>
 
 using namespace VSTGUI;
 using namespace std;
@@ -18,6 +21,8 @@ enum
    cs_drag = 1,
 };
 
+class SurgeStorage;
+
 //------------------------------------------------------------------------------------------------
 
 CModulationSourceButton::CModulationSourceButton(const CRect& size,
@@ -25,11 +30,15 @@ CModulationSourceButton::CModulationSourceButton(const CRect& size,
                                                  long tag,
                                                  int state,
                                                  int msid,
-                                                 std::shared_ptr<SurgeBitmaps> bitmapStore)
+                                                 std::shared_ptr<SurgeBitmaps> bitmapStore,
+                                                 SurgeStorage* storage)
     : CCursorHidingControl(size, listener, tag, 0), OldValue(0.f)
 {
    this->state = state;
    this->msid = msid;
+   
+   this->storage = storage;
+
    tint = false;
    used = false;
    bipolar = false;
@@ -40,6 +49,7 @@ CModulationSourceButton::CModulationSourceButton(const CRect& size,
    label[0] = 0;
    blink = 0;
    bmp = bitmapStore->getBitmap(IDB_MODSRC_BG);
+   this->storage = nullptr;
 }
 
 //------------------------------------------------------------------------------------------------
@@ -109,8 +119,6 @@ void CModulationSourceButton::draw(CDrawContext* dc)
    CRect sze = getViewSize();
    // sze.offset(-size.left,-size.top);
 
-   const CColor ColSelectedBG = CColor(0, 0, 0, 255);
-   const CColor ColBG = CColor(18, 52, 99, 255);
    const CColor ColHover = CColor(103, 167, 253, 255);
    const CColor ColEdge = CColor(46, 134, 254, 255);
    const CColor ColTint = CColor(46, 134, 254, 255);
@@ -136,25 +144,57 @@ void CModulationSourceButton::draw(CDrawContext* dc)
 
    CColor FrameCol, FillCol, FontCol;
 
-   FillCol = ColBG;
-   FrameCol = UsedOrActive ? ColEdge : ColSemiTint;
-   FontCol = UsedOrActive ? ColEdge : ColSemiTint;
+   auto brighten = [](const CColor &c) -> CColor
+                      {
+                         auto fac = 1.4f;
+                         return CColor( std::min( (int)(c.red * fac), 255 ),
+                                        std::min( (int)(c.green * fac), 255 ),
+                                        std::min( (int)(c.blue * fac), 255 ) );
+                      };
+
+   FillCol = skin->getColor( "modbutton.inactive.fill", CColor(18, 52, 99, 255) );
+   FrameCol = UsedOrActive ? skin->getColor( "modbutton.inactive.frame", ColEdge ) :
+      skin->getColor( "modbutton.used.frame", ColSemiTint );
+   FontCol = UsedOrActive ? skin->getColor( "modbutton.inactive.font", ColEdge ) :
+      skin->getColor( "modbutton.used.font", ColSemiTint );
+   if( hovered )
+   {
+      FrameCol = UsedOrActive ? skin->getColor( "modbutton.inactive.frame.hover", brighten( FrameCol ) ):
+         skin->getColor( "modbutton.used.frame.hover", brighten( FrameCol ) );
+      FontCol = UsedOrActive ? skin->getColor( "modbutton.inactive.font.hover", brighten( ColEdge )  ):
+         skin->getColor( "modbutton.used.font.hover", brighten( ColSemiTint ) );
+   }
+   
    if (ActiveModSource)
    {
-      FrameCol = blink ? ColBlink : ColTint;
-      FillCol = blink ? ColBlink : ColTint;
-      FontCol = ColBG;
+      FrameCol = skin->getColor( "modbutton.active.frame", ColBlink ); // blink ? ColBlink : ColTint;
+      if( hovered )
+         FrameCol = skin->getColor( "modbutton.active.frame.hover", brighten( FrameCol ) );
+      
+      FillCol = skin->getColor( "modbutton.active.fill", ColBlink ); // blink ? ColBlink : ColTint;
+      FontCol = skin->getColor( "modbutton.active.font", CColor(18, 52, 99, 255) );
+      if( hovered )
+         FontCol = skin->getColor( "modbutton.active.font.hover", brighten( CColor(18, 52, 99, 255) ) );
    }
    else if (SelectedModSource)
    {
-      FrameCol = ColTint;
-      FillCol = ColTint;
-      FontCol = ColBG;
+      FrameCol = skin->getColor( "modbutton.selected.frame", ColTint );
+      if( hovered )
+         FrameCol = skin->getColor( "modbutton.selected.frame.hover", brighten( FrameCol ) );
+      FillCol = skin->getColor( "modbutton.selected.fill", ColTint );
+      FontCol = skin->getColor( "modbutton.selected.font", CColor(18, 52, 99, 255) );
+      if( hovered )
+         FontCol = skin->getColor( "modbutton.selected.font.hover", brighten( CColor(18, 52, 99, 255) ) );
    }
    else if (tint)
    {
-      FrameCol = ColHover;
-      FontCol = ColHover;
+      FillCol = skin->getColor( "modbutton.used.fill", FillCol );
+      FrameCol = skin->getColor( "modbutton.used.frame", ColHover );
+      if( hovered )
+         FrameCol = skin->getColor( "modbutton.used.frame.hover", brighten( FrameCol ) );
+      FontCol = skin->getColor( "modbutton.used.font", ColHover );
+      if( hovered )
+         FontCol = skin->getColor( "modbutton.used.font.hover", brighten( ColHover ) );
    }
 
    CRect framer(sze);
@@ -172,7 +212,15 @@ void CModulationSourceButton::draw(CDrawContext* dc)
    dc->drawRect(framer, kDrawFilled);
    dc->setFillColor(FillCol);
    dc->drawRect(fillr, kDrawFilled);
-   dc->drawString(label, txtbox, kCenterText, true);
+
+   if( hasAlternate && useAlternate )
+   {
+      dc->drawString(alternateLabel.c_str(), txtbox, kCenterText, true);
+   }
+   else
+   {
+      dc->drawString(label, txtbox, kCenterText, true);
+   }
 
    if (is_metacontroller)
    {
@@ -182,7 +230,7 @@ void CModulationSourceButton::draw(CDrawContext* dc)
       MCRect.top += 12;
       MCRect.bottom--;
       MCRect.right--;
-      dc->setFillColor(ColBG);
+      dc->setFillColor(skin->getColor( "modbutton.inactive.fill", CColor(18, 52, 99, 255) ));
       dc->drawRect(MCRect, kDrawFilled);
       CRect brect(MCRect);
       brect.inset(1, 1);
@@ -239,6 +287,9 @@ void CModulationSourceButton::draw(CDrawContext* dc)
 
 CMouseEventResult CModulationSourceButton::onMouseDown(CPoint& where, const CButtonState& buttons)
 {
+   if (storage)
+      this->hideCursor = Surge::Storage::getUserDefaultValue(storage, "showCursorWhileEditing", 0);
+
    super::onMouseDown(where, buttons);
 
    if (!getMouseEnabled())
@@ -257,10 +308,24 @@ CMouseEventResult CModulationSourceButton::onMouseDown(CPoint& where, const CBut
    }
 
    if (listener &&
-       buttons & (kAlt | kRButton | kMButton | kShift | kControl | kApple | kDoubleClick))
+       buttons & (kAlt | kRButton | kMButton | kButton4 | kButton5 | kShift | kControl | kApple | kDoubleClick))
    {
       if (listener->controlModifierClicked(this, buttons) != 0)
          return kMouseDownEventHandledButDontNeedMovedOrUpEvents;
+   }
+
+   if (is_metacontroller && (buttons & kDoubleClick) && MCRect.pointInside(where) && !controlstate)
+   {
+      if (bipolar)
+         value = 0.5;
+      else
+         value = 0;
+
+      invalid();
+      if (listener)
+         listener->valueChanged(this);
+
+      return kMouseDownEventHandledButDontNeedMovedOrUpEvents;
    }
 
    if (is_metacontroller && MCRect.pointInside(where) && (buttons & kLButton) && !controlstate)
@@ -326,6 +391,33 @@ double CModulationSourceButton::getMouseDeltaScaling(CPoint& where, const CButto
       scaling *= 0.1;
 
    return scaling;
+}
+
+bool CModulationSourceButton::onWheel(const VSTGUI::CPoint& where, const float &distance, const VSTGUI::CButtonState& buttons)
+{
+    if( ! is_metacontroller )
+        return false;
+    
+    auto rate = 1.f;
+
+#if WINDOWS
+    // This is purely empirical. The wheel for this control feels slow on windows
+    // but fine on a macos trackpad. I callibrated it by making sure the trackpad
+    // across the pad gesture on my macbook pro moved the control the same amount
+    // in surge mac as it does in vst3 bitwig in parallels.
+    rate = 10.f;
+#endif      
+
+    if( buttons & kShift )
+      rate *= 0.05;
+    
+    value += rate * distance / (double)(getWidth());
+    value = limit_range(value, 0.f, 1.f);
+    event_is_drag = true;
+    invalid();
+    if (listener)
+        listener->valueChanged(this);
+    return true;
 }
 
 //------------------------------------------------------------------------------------------------

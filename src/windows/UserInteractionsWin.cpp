@@ -1,6 +1,10 @@
-#include <Windows.h>
-#include <Commdlg.h>
+#include <windows.h>
+#include <shlobj.h>
+#include <commdlg.h>
 #include <string>
+#include <iostream>
+#include <sstream>
+
 #include "UserInteractions.h"
 #include "SurgeGUIEditor.h"
 
@@ -24,6 +28,16 @@ void promptError(const Surge::Error &error, SurgeGUIEditor *guiEditor)
     promptError(error.getMessage(), error.getTitle());
 }
 
+void promptInfo(const std::string &message, const std::string &title,
+                SurgeGUIEditor *guiEditor)
+{
+    MessageBox(::GetActiveWindow(),
+               message.c_str(),
+               title.c_str(),
+               MB_OK | MB_ICONINFORMATION );
+}
+
+
 MessageResult promptOKCancel(const std::string &message, const std::string &title,
                              SurgeGUIEditor *guiEditor)
 {
@@ -41,19 +55,102 @@ void openURL(const std::string &url)
     ShellExecute(NULL, "open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
 }
 
+void showHTML( const std::string &html )
+{
+    TCHAR lpTempPathBuffer[MAX_PATH];
+
+    auto dwRetVal = GetTempPath(MAX_PATH, lpTempPathBuffer);
+    std::ostringstream fns;
+    fns << lpTempPathBuffer << "surge-data." << rand() << ".html";
+
+    FILE *f = fopen(fns.str().c_str(), "w" );
+    if( f )
+    {
+        fprintf( f, "%s", html.c_str());
+        fclose(f);
+        std::string url = std::string("file:///") + fns.str();
+        openURL(url);
+    }
+}
+
 void openFolderInFileBrowser(const std::string& folder)
 {
    std::string url = "file://" + folder;
    UserInteractions::openURL(url);
 }
 
+// thanks https://stackoverflow.com/questions/12034943/win32-select-directory-dialog-from-c-c  
+static int CALLBACK BrowseCallbackProc(HWND hwnd,UINT uMsg, LPARAM lParam, LPARAM lpData)
+{
+
+    if(uMsg == BFFM_INITIALIZED)
+    {
+        std::string tmp = (const char *) lpData;
+        std::cout << "path: " << tmp << std::endl;
+        SendMessage(hwnd, BFFM_SETSELECTION, TRUE, lpData);
+    }
+
+    return 0;
+}
+
+void BrowseFolder(std::string saved_path, std::function<void(std::string)> cb)
+{
+    TCHAR path[MAX_PATH];
+
+    const char * path_param = saved_path.c_str();
+
+    BROWSEINFO bi = { 0 };
+    bi.lpszTitle  = ("Browse for folder...");
+    bi.ulFlags    = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    bi.lpfn       = BrowseCallbackProc;
+    bi.lParam     = (LPARAM) path_param;
+
+    LPITEMIDLIST pidl = SHBrowseForFolder ( &bi );
+
+    if ( pidl != 0 )
+    {
+        //get the name of the folder and put it in path
+        SHGetPathFromIDList ( pidl, path );
+
+        //free memory used
+        IMalloc * imalloc = 0;
+        if ( SUCCEEDED( SHGetMalloc ( &imalloc )) )
+        {
+            imalloc->Free ( pidl );
+            imalloc->Release ( );
+        }
+
+        cb( path );
+    }
+}
+
+
+  
 void promptFileOpenDialog(const std::string& initialDirectory,
                           const std::string& filterSuffix,
+                          const std::string& filterDescription,
                           std::function<void(std::string)> callbackOnOpen,
+                          bool canSelectDirectories,
+                          bool canCreateDirectories,
                           SurgeGUIEditor* guiEditor)
 {
+  if( canSelectDirectories )
+    {
+      BrowseFolder( initialDirectory, callbackOnOpen );
+      return;
+    }
    // With many thanks to
    // https://www.daniweb.com/programming/software-development/code/217307/a-simple-getopenfilename-example
+
+   // this also helped!
+   // https://stackoverflow.com/questions/34201213/c-lpstr-and-string-trouble-with-zero-terminated-strings
+
+   std::string fullFilter;
+   fullFilter.append(filterDescription);
+   fullFilter.push_back('\0');
+   fullFilter.append("*" + filterSuffix);
+   fullFilter.push_back('\0');
+
    char szFile[1024];
    OPENFILENAME ofn;
    ZeroMemory(&ofn, sizeof(ofn));
@@ -62,11 +159,11 @@ void promptFileOpenDialog(const std::string& initialDirectory,
    ofn.lpstrFile = szFile;
    ofn.lpstrFile[0] = '\0';
    ofn.nMaxFile = sizeof(szFile);
-   ofn.lpstrFilter = "All\0*.*\0";
+   ofn.lpstrFilter = fullFilter.c_str();
    ofn.nFilterIndex = 0;
    ofn.lpstrFileTitle = NULL;
    ofn.nMaxFileTitle = 0;
-   ofn.lpstrInitialDir = NULL;
+   ofn.lpstrInitialDir = initialDirectory.c_str();
    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
    if (GetOpenFileName(&ofn))

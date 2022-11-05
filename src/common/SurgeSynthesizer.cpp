@@ -1,6 +1,18 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #include "SurgeSynthesizer.h"
 #include "DspUtilities.h"
 #include <time.h>
@@ -16,6 +28,9 @@
 #include "vstgui/plugin-bindings/plugguieditor.h"
 #elif TARGET_VST3
 #include "SurgeVst3Processor.h"
+#include "vstgui/plugin-bindings/plugguieditor.h"
+#elif TARGET_LV2
+#include "SurgeLv2Wrapper.h"
 #include "vstgui/plugin-bindings/plugguieditor.h"
 #elif TARGET_APP
 #include "PluginLayer.h"
@@ -37,9 +52,10 @@
 
 using namespace std;
 
-SurgeSynthesizer::SurgeSynthesizer(PluginLayer* parent)
+SurgeSynthesizer::SurgeSynthesizer(PluginLayer* parent, std::string suppliedDataPath)
     //: halfband_AL(false),halfband_AR(false),halfband_BL(false),halfband_BR(false),
-    : hpA(&storage)
+    : storage(suppliedDataPath)
+    , hpA(&storage)
    , hpB(&storage)
    , _parent(parent)
    , halfbandA(6, true)
@@ -47,6 +63,7 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer* parent)
    , halfbandIN(6, true)
 {
    switch_toggled_queued = false;
+   audio_processing_active = false;
    halt_engine = false;
    release_if_latched[0] = true;
    release_if_latched[1] = true;
@@ -65,10 +82,10 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer* parent)
    memset(storage.getPatch().scenedata[1], 0, sizeof(pdata) * n_scene_params);
    memset(storage.getPatch().globaldata, 0, sizeof(pdata) * n_global_params);
    memset(mControlInterpolatorUsed, 0, sizeof(bool) * num_controlinterpolators);
-   memset(fxsync, 0, sizeof(FxStorage) * 8);
+   memset((void*)fxsync, 0, sizeof(FxStorage) * 8);
    for (int i = 0; i < 8; i++)
    {
-      memcpy(&fxsync[i], &storage.getPatch().fx[i], sizeof(FxStorage));
+      memcpy((void*)&fxsync[i], (void*)&storage.getPatch().fx[i], sizeof(FxStorage));
       fx_reload[i] = false;
    }
 
@@ -132,8 +149,8 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer* parent)
    polydisplay = 0;
    refresh_editor = false;
    patch_loaded = false;
-   storage.getPatch().category = "init";
-   storage.getPatch().name = "init";
+   storage.getPatch().category = "Init";
+   storage.getPatch().name = "Init";
    storage.getPatch().comment = "";
    storage.getPatch().author = "";
    midiprogramshavechanged = false;
@@ -149,6 +166,7 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer* parent)
    patchid_queue = -1;
    patchid = -1;
    CC0 = 0;
+   CC32 = 0;
    PCH = 0;
    for (int i = 0; i < 8; i++)
    {
@@ -168,9 +186,26 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer* parent)
    mpeEnabled = false;
    mpeVoices = 0;
    mpePitchBendRange = Surge::Storage::getUserDefaultValue(&storage, "mpePitchBendRange", 48);
-   mpeGlobalPitchBendRange = 2;
+   mpeGlobalPitchBendRange = 0;
 
-   //	load_patch(0);
+#if TARGET_VST3 || TARGET_VST2 || TARGET_AUDIOUNIT 
+   // If we are in a daw hosted environment, choose a preset from the preset library
+   // Skip LV2 until we sort out the patch change dynamics there
+   int pid = 0;
+   for (auto p : storage.patch_list)
+   {
+      if (p.name == "Init Saw" && storage.patch_category[p.category].name == "Init")
+      {
+         // patchid_queue = pid;
+         // This is the wrong thing to do. I *think* what we need to do here is to
+         // explicitly load the file directly inline on thread using loadPatchFromFile
+         // and set up the location int rather than defer the load. But do that
+         // later
+         break;
+      }
+      pid++;
+   }
+#endif   
 }
 
 SurgeSynthesizer::~SurgeSynthesizer()
@@ -194,9 +229,14 @@ SurgeSynthesizer::~SurgeSynthesizer()
 
 int SurgeSynthesizer::calculateChannelMask(int channel, int key)
 {
+   /*
+   ** Just because I always forget
+   **
+   ** A voice is routed to scene n if channelmask & n. So "1" means scene A, "2" means scene B and "3" (= 2 | 1 ) = both.
+   */
    int channelmask = channel;
 
-   if ((channel == 0) || (channel > 2) || mpeEnabled)
+   if ((channel == 0) || (channel > 2) || mpeEnabled || storage.getPatch().scenemode.val.i == sm_chsplit ) 
    {
       switch (storage.getPatch().scenemode.val.i)
       {
@@ -216,6 +256,13 @@ int SurgeSynthesizer::calculateChannelMask(int channel, int key)
          else
             channelmask = 2;
          break;
+      case sm_chsplit:
+         if( channel < ( (int)( storage.getPatch().splitkey.val.i / 8 ) + 1 ) )
+            channelmask = 1;
+         else
+            channelmask = 2;
+
+         break;
       }
    }
    else if(storage.getPatch().scenemode.val.i == sm_single)
@@ -225,7 +272,7 @@ int SurgeSynthesizer::calculateChannelMask(int channel, int key)
        else
            channelmask = 1;
    }
-
+   
    return channelmask;
 }
 
@@ -242,12 +289,47 @@ void SurgeSynthesizer::playNote(char channel, char key, char velocity, char detu
    int channelmask = calculateChannelMask(channel, key);
 
    if (channelmask & 1)
+   {
       playVoice(0, channel, key, velocity, detune);
+   }
    if (channelmask & 2)
+   {
       playVoice(1, channel, key, velocity, detune);
+   }
 
    channelState[channel].keyState[key].keystate = velocity;
    channelState[channel].keyState[key].lastdetune = detune;
+
+   /*
+   ** OK so why is there hold stuff here? This is play not release.
+   ** Well if you release a key with the pedal down it goes into the
+   ** 'release me later' buffer. If you press the key again it stays there
+   ** so even with the key held, you end up releasing it when you pedal. 
+   **
+   ** Or: NoteOn / Pedal On / Note Off / Note On / Pedal Off should leave the note ringing
+   **
+   ** and right now it doesn't
+   */
+   bool noHold = ! channelState[channel].hold;
+   if( mpeEnabled )
+      noHold = noHold && ! channelState[0].hold;
+
+   if( ! noHold )
+   {
+      for( int s=0; s<2; ++s )
+      {
+         for( auto &h : holdbuffer[s] )
+         {            
+            if( h.first == channel && h.second == key )
+            {
+               h.first = -1;
+               h.second = -1;
+            }
+         }
+      }
+   }
+
+
 }
 
 void SurgeSynthesizer::softkillVoice(int s)
@@ -418,7 +500,7 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
          new (nvoice) SurgeVoice(&storage, &storage.getPatch().scene[scene],
                                  storage.getPatch().scenedata[scene], key, velocity, channel, scene,
                                  detune, &channelState[channel].keyState[key],
-                                 &channelState[mpeMainChannel], &channelState[channel]);
+                                 &channelState[mpeMainChannel], &channelState[channel], mpeEnabled);
       }
       break;
    }
@@ -453,7 +535,7 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
          new (nvoice) SurgeVoice(&storage, &storage.getPatch().scene[scene],
                                  storage.getPatch().scenedata[scene], key, velocity, channel, scene,
                                  detune, &channelState[channel].keyState[key],
-                                 &channelState[mpeMainChannel], &channelState[channel]);
+                                 &channelState[mpeMainChannel], &channelState[channel], mpeEnabled);
       }
    }
    break;
@@ -499,7 +581,7 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
             new (nvoice) SurgeVoice(&storage, &storage.getPatch().scene[scene],
                                     storage.getPatch().scenedata[scene], key, velocity, channel,
                                     scene, detune, &channelState[channel].keyState[key],
-                                    &channelState[mpeMainChannel], &channelState[channel]);
+                                    &channelState[mpeMainChannel], &channelState[channel], mpeEnabled);
          }
       }
    }
@@ -520,22 +602,27 @@ void SurgeSynthesizer::releaseScene(int s)
 
 void SurgeSynthesizer::releaseNote(char channel, char key, char velocity)
 {
-   int channelmask =
-       ((channel == 0) ? 3 : 0) || ((channel == 1) ? 1 : 0) || ((channel == 2) ? 2 : 0);
-
-   // if(channelmask&1)
+   for( int s=0; s<2; ++s )
    {
-      if (!channelState[channel].hold)
-         releaseNotePostHoldCheck(0, channel, key, velocity);
-      else
-         holdbuffer[0].push_back(key); // hold pedal is down, add to bufffer
+      for( auto *v : voices[s] )
+      {
+         if ((v->state.key == key) && (v->state.channel == channel))
+            v->state.releasevelocity = velocity;
+      }
    }
-   // if(channelmask&2)
+
+   bool noHold = ! channelState[channel].hold;
+   if( mpeEnabled )
+      noHold = noHold && ! channelState[0].hold;
+   
+   for( int s=0; s<2; ++s )
    {
-      if (!channelState[channel].hold)
-         releaseNotePostHoldCheck(1, channel, key, velocity);
+      if (noHold)
+         releaseNotePostHoldCheck(s, channel, key, velocity);
       else
-         holdbuffer[1].push_back(key); // hold pedal is down, add to bufffer
+      {
+         holdbuffer[s].push_back(std::make_pair(channel,key)); // hold pedal is down, add to bufffer
+      }
    }
 }
 
@@ -716,6 +803,13 @@ void SurgeSynthesizer::pitchBend(char channel, int value)
       }
    }
 
+   /*
+   ** So here's the thing. We want global pitch bend modulation to work for other things in MPE mode.
+   ** This code has beenhere forever. But that means we need to ignore the channel[0] mpe pitchbend
+   ** elsewhere, especially since the range was hardwired to 2 (but is now 0). As far as I know the
+   ** main MPE devices don't have a global pitch bend anyway so this just screws up regular keyboards
+   ** sending channel 0 pitch bend in MPE mode.
+   */
    if (!mpeEnabled || channel == 0)
    {
       storage.pitch_bend = value / 8192.f;
@@ -756,21 +850,25 @@ void SurgeSynthesizer::programChange(char channel, int value)
 
 void SurgeSynthesizer::updateDisplay()
 {
-#if PLUGGUI
-#else
+#if ! TARGET_AUDIOUNIT
    getParent()->updateDisplay();
 #endif
+   refresh_editor = true;
 }
 
 void SurgeSynthesizer::sendParameterAutomation(long index, float value)
 {
    int externalparam = remapInternalToExternalApiId(index);
 
+#if TARGET_VST3 || TARGET_AUDIOUNIT
+   if( index >= metaparam_offset )
+      externalparam = index;
+#endif
+
    if (externalparam >= 0)
    {
 #if TARGET_AUDIOUNIT
-      // FIXME!
-      // getParent()->ParameterUpdate(externalparam);
+      getParent()->ParameterUpdate(externalparam);
 #elif TARGET_VST3
       getParent()->setParameterAutomated(externalparam, value);
 #elif TARGET_HEADLESS || TARGET_APP
@@ -808,6 +906,9 @@ void SurgeSynthesizer::onRPN(int channel, int lsbRPN, int msbRPN, int lsbValue, 
      
      for each channel. Which seems unrelated to the spec. But as a result the original onRPN code
      means you get no MPE with a Roli Seaboard.
+
+     Hey one year later an edit: Those aren't coming from ROLI they are coming from Logic PRO and
+     now that I correct modify and stream MPE state, we should not listen to those messages.
      */
     
    if (lsbRPN == 0 && msbRPN == 0) // PITCH BEND RANGE
@@ -825,17 +926,26 @@ void SurgeSynthesizer::onRPN(int channel, int lsbRPN, int msbRPN, int lsbValue, 
    {
       mpeEnabled = msbValue > 0;
       mpeVoices = msbValue & 0xF;
-      mpePitchBendRange = Surge::Storage::getUserDefaultValue(&storage, "mpePitchBendRange", 48);
-      mpeGlobalPitchBendRange = 2;
+      if( mpePitchBendRange < 0 )
+         mpePitchBendRange = Surge::Storage::getUserDefaultValue(&storage, "mpePitchBendRange", 48);
+      mpeGlobalPitchBendRange = 0;
       return;
    }
    else if (lsbRPN == 4 && msbRPN == 0 && channel != 0 && channel != 0xF )
    {
+      /*
+      ** This is code sent by logic in all cases for some reason. In ancient times
+      ** I thought it came from a roli. But I since changed the MPE state management so
+      ** with 1.6.5 do this:
+      */
+#if 0      
        // This is the invalid message which the ROLI sends. Rather than have the Roli not work
        mpeEnabled = true;
        mpeVoices = msbValue & 0xF;
        mpePitchBendRange = Surge::Storage::getUserDefaultValue(&storage, "mpePitchBendRange", 48);
-       mpeGlobalPitchBendRange = 2;
+       std::cout << __LINE__ << " " << __FILE__ << " MPEE=" << mpeEnabled << " MPEPBR=" << mpePitchBendRange << std::endl;
+       mpeGlobalPitchBendRange = 0;
+#endif       
        return;
    }
 }
@@ -859,8 +969,6 @@ float int7ToBipolarFloat(int x)
 
 void SurgeSynthesizer::channelController(char channel, int cc, int value)
 {
-   int channelmask = ((channel == 0) ? 3 : 0) | ((channel == 1) ? 1 : 0) | ((channel == 2) ? 2 : 0);
-
    float fval = (float)value * (1.f / 127.f);
    // store all possible NRPN & RPNs in a short array .. just amounts for 128kb or thereabouts
    // anyway
@@ -890,22 +998,7 @@ void SurgeSynthesizer::channelController(char channel, int cc, int value)
          onRPN(channel, channelState[channel].rpn[0], channelState[channel].rpn[1],
                channelState[channel].rpn_v[0], channelState[channel].rpn_v[1]);
       }
-      break;
-   case 38:
-      if (channelState[channel].nrpn_last)
-         channelState[channel].nrpn_v[0] = value;
-      else
-         channelState[channel].rpn_v[0] = value;
-      break;
-   case 64:
-   {
-      channelState[channel].hold = value > 63; // check hold pedal
-      if (channelmask & 1)
-         purgeHoldbuffer(0);
-      if (channelmask & 2)
-         purgeHoldbuffer(1);
       return;
-   }
 
    case 10:
    {
@@ -915,6 +1008,52 @@ void SurgeSynthesizer::channelController(char channel, int cc, int value)
          return;
       }
       break;
+   }
+
+   case 32:
+      CC32 = value;
+      return;
+
+   case 38:
+      if (channelState[channel].nrpn_last)
+         channelState[channel].nrpn_v[0] = value;
+      else
+         channelState[channel].rpn_v[0] = value;
+      break;
+
+   case 64:
+   {
+      channelState[channel].hold = value > 63; // check hold pedal
+
+      // OK in single mode, only purge scene 0, but in split or dual purge both, and in chsplit
+      // pick based on channel
+      switch(storage.getPatch().scenemode.val.i)
+      {
+      case sm_single:
+         purgeHoldbuffer(storage.getPatch().scene_active.val.i);
+         break;
+      case sm_split:
+      case sm_dual:
+         purgeHoldbuffer(0);
+         purgeHoldbuffer(1);
+         break;
+      case sm_chsplit:
+         if( mpeEnabled && channel == 0 ) // a control channel message
+         {
+            purgeHoldbuffer(0);
+            purgeHoldbuffer(1);
+         }
+         else
+         {
+            if( channel < ( (int)( storage.getPatch().splitkey.val.i / 8 ) + 1 ) )
+               purgeHoldbuffer(0);
+            else
+               purgeHoldbuffer(1);
+         }
+         break;
+      }
+
+      return;
    }
 
    case 74:
@@ -943,6 +1082,9 @@ void SurgeSynthesizer::channelController(char channel, int cc, int value)
       channelState[channel].rpn[1] = value;
       channelState[channel].nrpn_last = false;
       return;
+   case 120: // all sound off
+   case 123: // all notes off
+      return;
    };
 
    int cc_encoded = cc;
@@ -964,7 +1106,7 @@ void SurgeSynthesizer::channelController(char channel, int cc, int value)
       }
 
       fval = (float)tv / 16384.0f;
-      int cmode = channelState[channel].nrpn_last;
+      // int cmode = channelState[channel].nrpn_last;
    }
 
    for (int i = 0; i < n_customcontrollers; i++)
@@ -973,7 +1115,12 @@ void SurgeSynthesizer::channelController(char channel, int cc, int value)
       {
          ((ControllerModulationSource*)storage.getPatch().scene[0].modsources[ms_ctrl1 + i])
              ->set_target01(fval);
+#if !TARGET_LV2
          sendParameterAutomation(i + metaparam_offset, fval);
+#else
+         // LV2 must not modify its own control input; just set the value.
+         setParameter01(i + metaparam_offset, fval);
+#endif
       }
    }
 
@@ -1045,26 +1192,29 @@ void SurgeSynthesizer::channelController(char channel, int cc, int value)
 
 void SurgeSynthesizer::purgeHoldbuffer(int scene)
 {
-   int z;
-   list<int>::iterator iter = holdbuffer[scene].begin();
-   while (1)
+   std::list<std::pair<int,int>> retainBuffer;
+   for( auto hp : holdbuffer[scene] )
    {
-      if (iter == holdbuffer[scene].end())
-         break;
-      z = *iter;
-      if (/*voice_state[z].active && */ !channelState[0].hold)
+      auto channel = hp.first;
+      auto key = hp.second;
+
+      if( channel < 0 || key < 0 )
       {
-         // voices[z]->release(127);
-         releaseNotePostHoldCheck(scene, 0, z, 127);
-         list<int>::iterator del = iter;
-         iter++;
-         holdbuffer[scene].erase(del);
+         // std::cout << "Caught tricky double releease condition!" << std::endl;
       }
       else
-         iter++;
+      {
+         if (!channelState[0].hold && ! channelState[channel].hold )
+         {
+            releaseNotePostHoldCheck(scene, channel, key, 127);
+         }
+         else
+         {
+            retainBuffer.push_back(hp);
+         }
+      }
    }
-
-   // note: Must remove entries when notes kill themselves as well
+   holdbuffer[scene] = retainBuffer;
 }
 
 void SurgeSynthesizer::allNotesOff()
@@ -1112,6 +1262,11 @@ void SurgeSynthesizer::allNotesOff()
 
 void SurgeSynthesizer::setSamplerate(float sr)
 {
+   // If I am changing my sample rate I will change my internal tables, so this
+   // needs to be tuning aware and reapply tuning if needed
+   auto s = storage.currentScale;
+   bool wasST = storage.isStandardTuning;
+
    samplerate = sr;
    dsamplerate = sr;
    samplerate_inv = 1.0 / sr;
@@ -1120,6 +1275,11 @@ void SurgeSynthesizer::setSamplerate(float sr)
    dsamplerate_os_inv = 1.0 / dsamplerate_os;
    storage.init_tables();
    sinus.set_rate(1000.0 * dsamplerate_inv);
+
+   if( ! wasST )
+   {
+       storage.retuneToScale(s);
+   }
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1300,8 +1460,29 @@ bool SurgeSynthesizer::setParameter01(long index, float value, bool external, bo
             }
          }
          break;
-      case ct_wstype:
       case ct_osctype:
+      {
+          int s = storage.getPatch().param_ptr[index]->scene - 1;
+
+          if( storage.getPatch().param_ptr[index]->val.i != oldval.i )
+          {
+              /*
+              ** Wish there was a better way to figure out my osc but thsi works
+              */
+              for( auto oi = 0; s >=0 && s <= 1 && oi < n_oscs; oi++ )
+              {
+                  if( storage.getPatch().scene[s].osc[oi].type.id == storage.getPatch().param_ptr[index]->id )
+                  {
+                      storage.getPatch().scene[s].osc[oi].queue_type = storage.getPatch().param_ptr[index]->val.i;
+                  }
+              }
+          }
+          switch_toggled_queued = true;
+          need_refresh = true;
+          refresh_editor = true;
+          break;
+      }
+      case ct_wstype:
       case ct_bool_mute:
       case ct_bool_fm:
       case ct_fbconfig:
@@ -1338,11 +1519,11 @@ bool SurgeSynthesizer::setParameter01(long index, float value, bool external, bo
             storage.getPatch().scene[s].filterunit[1].cutoff.set_type(ct_freq_audible);
             storage.getPatch().scene[s].filterunit[1].cutoff.set_name("Cutoff");
          }
-
          need_refresh = true;
       }
       break;
       case ct_envmode:
+         refresh_editor = true;
          need_refresh = true; // See github issue #160
          break;
       case ct_bool_link_switch:
@@ -1364,7 +1545,7 @@ bool SurgeSynthesizer::setParameter01(long index, float value, bool external, bo
             }
          }
          switch_toggled_queued = true;
-         // need_refresh = true; See github issue #160
+         need_refresh = true; 
          break;
       };
    }
@@ -1417,7 +1598,7 @@ bool SurgeSynthesizer::loadFx(bool initp, bool force_reload_all)
          }
 
          if (/*!force_reload_all && */ storage.getPatch().fx[s].type.val.i)
-            memcpy(&storage.getPatch().fx[s].p, &fxsync[s].p, sizeof(Parameter) * n_fx_params);
+            memcpy((void*)&storage.getPatch().fx[s].p, (void*)&fxsync[s].p, sizeof(Parameter) * n_fx_params);
 
          fx[s].reset(spawn_effect(storage.getPatch().fx[s].type.val.i, &storage,
                               &storage.getPatch().fx[s], storage.getPatch().globaldata));
@@ -1427,6 +1608,25 @@ bool SurgeSynthesizer::loadFx(bool initp, bool force_reload_all)
             fx[s]->init_ctrltypes();
             if (initp)
                fx[s]->init_default_values();
+            else
+            {
+               for(int j=0; j<n_fx_params; j++)
+               {
+                  auto p = &( storage.getPatch().fx[s].p[j] );
+                  if( p->valtype == vt_float )
+                  {
+                     if( p->val.f < p->val_min.f )
+                     {
+                        p->val.f = p->val_min.f;
+                     }
+                     if( p->val.f > p->val_max.f )
+                     {
+                        p->val.f = p->val_max.f;
+                     }
+                  }
+               }
+
+            }
             /*for(int j=0; j<n_fx_params; j++)
             {
                 storage.getPatch().globaldata[storage.getPatch().fx[s].p[j].id].f =
@@ -1434,13 +1634,29 @@ bool SurgeSynthesizer::loadFx(bool initp, bool force_reload_all)
             }*/
 
             fx[s]->init();
+
+            /*
+            ** Clear modulation onto FX otherwise it hangs around from old ones, often with
+            ** disastrously bad meaning. #2036. But only do this if it is a one FX change
+            ** (not a patch load)
+            */
+            if( ! force_reload_all ) 
+               for(int j=0; j<n_fx_params; j++)
+               {
+                  auto p = &( storage.getPatch().fx[s].p[j] );
+                  for( int ms=1; ms<n_modsources; ms++ )
+                  {
+                     clearModulation(p->id, (modsources)ms, true );
+                  }
+               }
+            
          }
          something_changed = true;
          refresh_editor = true;
       }
       else if (fx_reload[s])
       {
-         memcpy(&storage.getPatch().fx[s].p, &fxsync[s].p, sizeof(Parameter) * n_fx_params);
+         memcpy((void*)&storage.getPatch().fx[s].p, (void*)&fxsync[s].p, sizeof(Parameter) * n_fx_params);
          if (fx[s])
          {
             fx[s]->suspend();
@@ -1461,7 +1677,7 @@ bool SurgeSynthesizer::loadOscalgos()
    {
       for (int i = 0; i < n_oscs; i++)
       {
-
+         bool resend = false;
          if (storage.getPatch().scene[s].osc[i].queue_type > -1)
          {
             storage.getPatch().scene[s].osc[i].type.val.i =
@@ -1470,12 +1686,14 @@ bool SurgeSynthesizer::loadOscalgos()
             storage.getPatch().scene[s].osc[i].queue_type = -1;
             switch_toggled_queued = true;
             refresh_editor = true;
+            resend = true;
          }
 
          TiXmlElement* e = (TiXmlElement*)storage.getPatch().scene[s].osc[i].queue_xmldata;
 
          if (e)
          {
+            resend = true;
             for (int k = 0; k < n_osc_params; k++)
             {
                double d;
@@ -1494,6 +1712,18 @@ bool SurgeSynthesizer::loadOscalgos()
                }
             }
             storage.getPatch().scene[s].osc[i].queue_xmldata = 0;
+         }
+         if (resend)
+         {
+#if TARGET_LV2
+            auto tp = &(storage.getPatch().scene[s].osc[i].type);
+            sendParameterAutomation(tp->id, getParameter01(tp->id) );
+            for (int k = 0; k < n_osc_params; k++)
+            {
+               auto pp = &(storage.getPatch().scene[s].osc[i].p[k]);
+               sendParameterAutomation(pp->id, getParameter01(pp->id) );
+            }
+#endif            
          }
       }
    }
@@ -1518,9 +1748,15 @@ bool SurgeSynthesizer::isValidModulation(long ptag, modsources modsource)
       return false;
    if ((modsource == ms_keytrack) && (p == &storage.getPatch().scene[1].pitch))
       return false;
-   if ((p->ctrlgroup == cg_LFO) && (p->ctrlgroup_entry >= ms_lfo1) &&
-       !canModulateModulators(modsource))
+
+   /*
+     canModulateModulators is really a check at this point for "is amp or filter env" but
+     amp and filter env can modulate an VLFO so with 1.7 comment this out
+
+   if ((p->ctrlgroup == cg_LFO) && (p->ctrlgroup_entry >= ms_lfo1) && !canModulateModulators(modsource) )
       return false;
+   */
+
    if ((p->ctrlgroup == cg_LFO) && (p->ctrlgroup_entry == modsource))
       return false;
    if ((p->ctrlgroup == cg_LFO) && (p->ctrlgroup_entry >= ms_slfo1) && (!isScenelevel(modsource)))
@@ -1585,6 +1821,42 @@ bool SurgeSynthesizer::isActiveModulation(long ptag, modsources modsource)
       return true;
    return false;
 }
+
+bool SurgeSynthesizer::isBipolarModulation(modsources tms)
+{
+   // HERE
+   int scene_ms = storage.getPatch().scene_active.val.i;
+   /* You would think you could just do this nad ask for is_bipolar but remember the LFOs are made at voice time so... */
+   // auto ms = storage.getPatch().scene[scene_ms].modsources.at(tms);
+
+   // FIX - this will break in S++
+   if( tms >= ms_lfo1 && tms <= ms_slfo6 )
+   {
+      bool isup = storage.getPatch().scene[scene_ms].lfo[tms-ms_lfo1].unipolar.val.i ||
+         storage.getPatch().scene[scene_ms].lfo[tms-ms_lfo1].shape.val.i == ls_constant1;
+      
+      // For now
+      return !isup;
+   }
+   if( tms >= ms_ctrl1 && tms <= ms_ctrl8 )
+   {
+      // Controls can also be bipolar
+      auto ms = storage.getPatch().scene[scene_ms].modsources[tms];
+      if( ms )
+         return ms->is_bipolar();
+      else
+         return false;
+   }
+   if( tms == ms_keytrack )
+   {
+      return true;
+   }
+   else
+   {
+      return false;
+   }
+}
+
 
 bool SurgeSynthesizer::isModDestUsed(long ptag)
 {
@@ -1748,10 +2020,11 @@ void SurgeSynthesizer::clear_osc_modulation(int scene, int entry)
    storage.CS_ModRouting.leave();
 }
 
-void SurgeSynthesizer::clearModulation(long ptag, modsources modsource)
+void SurgeSynthesizer::clearModulation(long ptag, modsources modsource, bool clearEvenIfInvalid)
 {
-   if (!isValidModulation(ptag, modsource))
+   if (!isValidModulation(ptag, modsource) && ! clearEvenIfInvalid )
       return;
+   
    int scene = storage.getPatch().param_ptr[ptag]->scene;
 
    vector<ModulationRouting>* modlist;
@@ -1899,11 +2172,31 @@ void SurgeSynthesizer::getParameterDisplay(long index, char* text)
       sprintf(text, "-");
 }
 
+void SurgeSynthesizer::getParameterDisplayAlt(long index, char* text)
+{
+   if ((index >= 0) && (index < storage.getPatch().param_ptr.size()))
+   {
+      storage.getPatch().param_ptr[index]->get_display_alt(text);
+   }
+   else 
+   {
+      text[0] = 0;
+   }
+}
+
 void SurgeSynthesizer::getParameterDisplay(long index, char* text, float x)
 {
    if ((index >= 0) && (index < storage.getPatch().param_ptr.size()))
    {
       storage.getPatch().param_ptr[index]->get_display(text, true, x);
+   }
+   else if (index >= metaparam_offset)
+   {
+      sprintf(text, "%.2f %%",
+              100.f * storage.getPatch()
+                          .scene[0]
+                          .modsources[ms_ctrl1 + index - metaparam_offset]
+                          ->get_output());
    }
    else
       sprintf(text, "-");
@@ -1913,14 +2206,15 @@ void SurgeSynthesizer::getParameterName(long index, char* text)
 {
    if ((index >= 0) && (index < storage.getPatch().param_ptr.size()))
    {
-      // strncpy(text,storage.getPatch().param_ptr[index]->get_name(),32);
-      strncpy(text, storage.getPatch().param_ptr[index]->get_full_name(), 32);
-      // strncpy(text,storage.getPatch().param_ptr[index]->get_storage_name(),32);
+      int scn = storage.getPatch().param_ptr[index]->scene;
+      string sn[3] = {"", "A ", "B "};
+
+      sprintf(text, "%s%s", sn[scn].c_str(), storage.getPatch().param_ptr[index]->get_full_name());
    }
    else if (index >= metaparam_offset)
    {
       int c = index - metaparam_offset;
-      sprintf(text, "C%i:%s", c + 1, storage.getPatch().CustomControllerLabel[c]);
+      sprintf(text, "Macro %i: %s", c + 1, storage.getPatch().CustomControllerLabel[c]);
    }
    else
       sprintf(text, "-");
@@ -1930,20 +2224,31 @@ void SurgeSynthesizer::getParameterNameW(long index, wchar_t* ptr)
 {
    if ((index >= 0) && (index < storage.getPatch().param_ptr.size()))
    {
+      int scn = storage.getPatch().param_ptr[index]->scene;
+      char sn[3][3] = {"", "A ", "B "};
+      char pname[256];
+      
+      snprintf(pname, 255, "%s%s", sn[scn], storage.getPatch().param_ptr[index]->get_full_name());
+
       // the input is not wide so don't use %S
-      swprintf(ptr, 128, L"%s", storage.getPatch().param_ptr[index]->get_full_name());
+      swprintf(ptr, 128, L"%s", pname);
    }
    else if (index >= metaparam_offset)
    {
       int c = index - metaparam_offset;
+      // For a reason I don't understand, on windows, we need to sprintf then swprinf just the short char
+      // to make just these names work. :shrug:
+      char wideHack[256];
+       
       if (c >= num_metaparameters)
       {
-         swprintf(ptr, 128, L"C%i:ERROR");
+         snprintf(wideHack, 255, "Macro: ERROR");
       }
       else
       {
-         swprintf(ptr, 128, L"C%i:%s", c + 1, storage.getPatch().CustomControllerLabel[c]);
+         snprintf(wideHack, 255, "Macro %d: %s", c+1, storage.getPatch().CustomControllerLabel[c]);
       }
+      swprintf(ptr, 128, L"%s", wideHack);
    }
    else
    {
@@ -1955,19 +2260,14 @@ void SurgeSynthesizer::getParameterShortNameW(long index, wchar_t* ptr)
 {
    if ((index >= 0) && (index < storage.getPatch().param_ptr.size()))
    {
-      swprintf(ptr, 128, L"%s", storage.getPatch().param_ptr[index]->get_name());
+      int scn = storage.getPatch().param_ptr[index]->scene;
+      string sn[3] = {"", "A ", "B "};
+
+      swprintf(ptr, 128, L"%s%s", sn[scn].c_str(), storage.getPatch().param_ptr[index]->get_name());
    }
    else if (index >= metaparam_offset)
    {
-      int c = index - metaparam_offset;
-      if (c >= num_metaparameters)
-      {
-         swprintf(ptr, 128, L"C%i:ERROR", c + 1);
-      }
-      else
-      {
-         swprintf(ptr, 128, L"C%i:%s", c + 1, storage.getPatch().CustomControllerLabel[c]);
-      }
+       getParameterNameW( index, ptr );
    }
    else
    {
@@ -1998,7 +2298,11 @@ void SurgeSynthesizer::getParameterStringW(long index, float value, wchar_t* ptr
    }
    else if (index >= metaparam_offset)
    {
-      swprintf(ptr, 128, L"%.2f %%", 100.f * value);
+      // For a reason I don't understand, on windows, we need to sprintf then swprinf just the short char
+      // to make just these names work. :shrug:
+      char wideHack[256];
+      snprintf(wideHack, 256, "%.2f %%", 100.f * value ); 
+      swprintf(ptr, 128, L"%s", wideHack);
    }
    else
    {
@@ -2070,6 +2374,8 @@ float SurgeSynthesizer::normalizedToValue(long index, float value)
 {
    if (index < 0)
       return 0.f;
+   if (index >= metaparam_offset)
+      return value;
    if (index < storage.getPatch().param_ptr.size())
       return storage.getPatch().param_ptr[index]->normalized_to_value(value);
    return 0.f;
@@ -2079,6 +2385,8 @@ float SurgeSynthesizer::valueToNormalized(long index, float value)
 {
    if (index < 0)
       return 0.f;
+   if (index >= metaparam_offset)
+      return value;
    if (index < storage.getPatch().param_ptr.size())
       return storage.getPatch().param_ptr[index]->value_to_normalized(value);
    return 0.f;
@@ -2097,6 +2405,9 @@ DWORD WINAPI loadPatchInBackgroundThread(LPVOID lpParam)
    synth->patchid_queue = -1;
    synth->allNotesOff();
    synth->loadPatch(patchid);
+#if TARGET_LV2
+   synth->getParent()->patchChanged();
+#endif
    synth->halt_engine = false;
    return 0;
 }
@@ -2109,6 +2420,9 @@ void SurgeSynthesizer::processThreadunsafeOperations()
       if (patchid_queue >= 0)
       {
          loadPatch(patchid_queue);
+#if TARGET_LV2
+         getParent()->patchChanged();
+#endif
          patchid_queue = -1;
       }
 
@@ -2123,8 +2437,8 @@ void SurgeSynthesizer::processControl()
 {
    storage.perform_queued_wtloads();
    int sm = storage.getPatch().scenemode.val.i;
-   bool playA = (sm == sm_split) || (sm == sm_dual) || (storage.getPatch().scene_active.val.i == 0);
-   bool playB = (sm == sm_split) || (sm == sm_dual) || (storage.getPatch().scene_active.val.i == 1);
+   bool playA = (sm == sm_split) || (sm == sm_dual) || (sm == sm_chsplit) || (storage.getPatch().scene_active.val.i == 0);
+   bool playB = (sm == sm_split) || (sm == sm_dual) || (sm == sm_chsplit) || (storage.getPatch().scene_active.val.i == 1);
    storage.songpos = time_data.ppqPos;
    storage.temposyncratio = time_data.tempo / 120.f;
    storage.temposyncratio_inv = 1.f / storage.temposyncratio;
@@ -2329,7 +2643,6 @@ void SurgeSynthesizer::process()
       clear_block_antidenormalnoise(storage.audio_in_nonOS[1], BLOCK_SIZE_QUAD);
    }
 
-   float sceneout alignas(16)[2][2][BLOCK_SIZE_OS];
    float fxsendout alignas(16)[2][2][BLOCK_SIZE];
    bool play_scene[2];
 
@@ -2412,14 +2725,9 @@ void SurgeSynthesizer::process()
          else
             iter++;
       }
-   }
-   polydisplay = vcount;
 
-   // CS LEAVE
-   storage.CS_ModRouting.leave();
+      storage.CS_ModRouting.leave();
 
-   for (int s = 0; s < 2; s++)
-   {
       fbq_global g;
       g.FU1ptr = GetQFPtrFilterUnit(storage.getPatch().scene[s].filterunit[0].type.val.i,
                                     storage.getPatch().scene[s].filterunit[0].subtype.val.i);
@@ -2444,6 +2752,14 @@ void SurgeSynthesizer::process()
          ProcessQuadFB(FBQ[s][e >> 2], g, sceneout[s][0], sceneout[s][1]);
       }
 
+      if( s == 0 && storage.otherscene_clients > 0 )
+      {
+         // Make available for scene b 
+         copy_block(sceneout[0][0], storage.audio_otherscene[0], BLOCK_SIZE_OS_QUAD);
+         copy_block(sceneout[0][1], storage.audio_otherscene[1], BLOCK_SIZE_OS_QUAD);
+      }
+
+      
       iter = voices[s].begin();
       while (iter != voices[s].end())
       {
@@ -2452,7 +2768,12 @@ void SurgeSynthesizer::process()
          v->GetQFB(); // save filter state in voices after quad processing is done
          iter++;
       }
+      storage.CS_ModRouting.enter();
    }
+
+   // CS LEAVE
+   storage.CS_ModRouting.leave();
+   polydisplay = vcount;
 
    if (play_scene[0])
    {
@@ -2557,10 +2878,118 @@ void SurgeSynthesizer::process()
 
    hardclip_block8(output[0], BLOCK_SIZE_QUAD);
    hardclip_block8(output[1], BLOCK_SIZE_QUAD);
+
+   // since the sceneout is now routable we also need to mute and clip it
+   for( int s=0; s<2; ++s )
+   {
+      amp.multiply_2_blocks(sceneout[s][0], sceneout[s][1], BLOCK_SIZE_QUAD);
+      amp_mute.multiply_2_blocks(sceneout[s][0], sceneout[s][1], BLOCK_SIZE_QUAD);
+      hardclip_block8(sceneout[s][0], BLOCK_SIZE_QUAD);
+      hardclip_block8(sceneout[s][1], BLOCK_SIZE_QUAD);
+   }
 }
 
 PluginLayer* SurgeSynthesizer::getParent()
 {
    assert(_parent != nullptr);
    return _parent;
+}
+
+void SurgeSynthesizer::populateDawExtraState() {
+   storage.getPatch().dawExtraState.isPopulated = true;
+   storage.getPatch().dawExtraState.mpeEnabled = mpeEnabled;
+   storage.getPatch().dawExtraState.mpePitchBendRange = mpePitchBendRange;
+   
+   storage.getPatch().dawExtraState.hasTuning = !storage.isStandardTuning;
+   if( ! storage.isStandardTuning )
+      storage.getPatch().dawExtraState.tuningContents = storage.currentScale.rawText;
+   else
+      storage.getPatch().dawExtraState.tuningContents = "";
+   
+   storage.getPatch().dawExtraState.hasMapping = !storage.isStandardMapping;
+   if( ! storage.isStandardMapping )
+      storage.getPatch().dawExtraState.mappingContents = storage.currentMapping.rawText;
+   else
+      storage.getPatch().dawExtraState.mappingContents = "";
+
+   int n = n_global_params + n_scene_params; // only store midictrl's for scene A (scene A -> scene
+                                             // B will be duplicated on load)
+   for (int i = 0; i < n; i++)
+   {
+      if (storage.getPatch().param_ptr[i]->midictrl >= 0)
+      {
+         storage.getPatch().dawExtraState.midictrl_map[i] = storage.getPatch().param_ptr[i]->midictrl;
+      }
+   }
+
+   for (int i=0; i<n_customcontrollers; ++i )
+   {
+      storage.getPatch().dawExtraState.customcontrol_map[i] = storage.controllers[i];
+   }
+
+}
+
+void SurgeSynthesizer::loadFromDawExtraState() {
+   if( ! storage.getPatch().dawExtraState.isPopulated )
+      return;
+   mpeEnabled = storage.getPatch().dawExtraState.mpeEnabled;
+   if( storage.getPatch().dawExtraState.mpePitchBendRange > 0 )
+      mpePitchBendRange = storage.getPatch().dawExtraState.mpePitchBendRange;
+   
+   if( storage.getPatch().dawExtraState.hasTuning )
+   {
+      try {
+         auto sc = Tunings::parseSCLData(storage.getPatch().dawExtraState.tuningContents );
+         storage.retuneToScale(sc);
+      }
+      catch( Tunings::TuningError &e )
+      {
+         Surge::UserInteractions::promptError( e.what(), "Unable to restore tuning" );
+         storage.retuneToStandardTuning();
+      }
+   }
+   else
+   {
+      storage.retuneToStandardTuning();
+   }
+   
+   if( storage.getPatch().dawExtraState.hasMapping )
+   {
+      try
+      {
+         auto kb = Tunings::parseKBMData(storage.getPatch().dawExtraState.mappingContents );
+         storage.remapToKeyboard(kb);
+      }
+      catch( Tunings::TuningError &e )
+      {
+         Surge::UserInteractions::promptError( e.what(), "Unable to restore mapping" );
+         storage.retuneToStandardTuning();
+      }
+      
+   }
+   else
+   {
+      storage.remapToStandardKeyboard();
+   }
+
+   int n = n_global_params + n_scene_params; // only store midictrl's for scene A (scene A -> scene
+                                             // B will be duplicated on load)
+   for (int i = 0; i < n; i++)
+   {
+      if (storage.getPatch().dawExtraState.midictrl_map.find(i) != storage.getPatch().dawExtraState.midictrl_map.end() )
+      {
+         storage.getPatch().param_ptr[i]->midictrl =  storage.getPatch().dawExtraState.midictrl_map[i];
+         if( i >= n_global_params )
+         {
+            storage.getPatch().param_ptr[i + n_scene_params]->midictrl =  storage.getPatch().dawExtraState.midictrl_map[i];
+         }
+      }
+   }
+
+   for (int i=0; i<n_customcontrollers; ++i )
+   {
+      if( storage.getPatch().dawExtraState.customcontrol_map.find(i) != storage.getPatch().dawExtraState.midictrl_map.end() )
+         storage.controllers[i] = storage.getPatch().dawExtraState.customcontrol_map[i];
+   }
+
 }

@@ -52,6 +52,7 @@ size_t RequiredWTSize(int TableSize, int TableCount)
 {
    int Size = 0;
 
+   TableCount += 3; // for sample padding. Should match the "3" in the AppendSilence block below.
    while (TableSize > 0)
    {
       Size += TableCount * (TableSize + FIRoffsetI16 + FIRipolI16_N);
@@ -117,8 +118,13 @@ void Wavetable::Copy(Wavetable* wt)
    current_id = -1;
    queue_id = -1;
 
-   memcpy(TableF32Data, wt->TableF32Data, sizeof(TableF32Data));
-   memcpy(TableI16Data, wt->TableI16Data, sizeof(TableI16Data));
+   if( dataSizes < wt->dataSizes )
+   {
+       allocPointers(wt->dataSizes);
+   }
+
+   memcpy(TableF32Data, wt->TableF32Data, dataSizes * sizeof(float));
+   memcpy(TableI16Data, wt->TableI16Data, dataSizes * sizeof(short));
 
    for (int i = 0; i < max_mipmap_levels; i++)
    {
@@ -162,7 +168,7 @@ bool Wavetable::BuildWT(void* wdata, wt_header& wh, bool AppendSilence)
 
    if (AppendSilence)
    {
-      n_tables += 3;
+       n_tables += 3; // this "3" should match the "3" in RequiredWTSize
    }
 
 #if WINDOWS

@@ -1,6 +1,18 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #pragma once
 
 enum modsrctype
@@ -45,6 +57,7 @@ enum modsources
    ms_slfo6,
    // ms_arpeggiator,
    ms_timbre,
+   ms_releasevelocity,
    n_modsources,
    /*ms_stepseq1,
    ms_stepseq2,
@@ -55,12 +68,13 @@ enum modsources
 
 const int n_customcontrollers = 8; // TODO remove this one
 const int num_metaparameters = n_customcontrollers;
+extern float samplerate_inv;
 
 const char modsource_abberations_button[n_modsources][32] = {
-    "Off",       "Velocity", "Keytrack", "Poly AT", "Chan. AT", "Pitchbend", "Modwheel", "Ctrl 1",
-    "Ctrl 2",    "Ctrl 3",   "Ctrl 4",   "Ctrl 5",  "Ctrl 6",   "Ctrl 7",    "Ctrl 8",   "Amp EG",
-    "Filter EG", "LFO 1",    "LFO 2",    "LFO 3",   "LFO 4",    "LFO 5",     "LFO 6",    "SLFO 1",
-    "SLFO 2",    "SLFO 3",   "SLFO 4",   "SLFO 5",  "SLFO 6",   "Timbre" /*,"Arpeggio"*/};
+    "Off",       "Velocity", "Keytrack", "Poly AT", "Channel AT", "Pitchbend", "Modwheel", "Macro 1",
+    "Macro 2",    "Macro 3",   "Macro 4",   "Macro 5",  "Macro 6",   "Macro 7",    "Macro 8",   "Amp EG",
+    "Filter EG", "LFO 1",    "LFO 2",    "LFO 3",   "LFO 4",    "LFO 5",     "LFO 6",    "S-LFO 1",
+    "S-LFO 2",    "S-LFO 3",   "S-LFO 4",   "S-LFO 5",  "S-LFO 6",   "Timbre", "Rel Velocity" /*,"Arpeggio"*/};
 
 const char modsource_abberations[n_modsources][32] = {"Off",
                                                       "Velocity",
@@ -69,14 +83,14 @@ const char modsource_abberations[n_modsources][32] = {"Off",
                                                       "Channel Aftertouch",
                                                       "Pitch Bend",
                                                       "Modulation Wheel",
-                                                      "Control 1",
-                                                      "Control 2",
-                                                      "Control 3",
-                                                      "Control 4",
-                                                      "Control 5",
-                                                      "Control 6",
-                                                      "Control 7",
-                                                      "Control 8",
+                                                      "Macro 1",
+                                                      "Macro 2",
+                                                      "Macro 3",
+                                                      "Macro 4",
+                                                      "Macro 5",
+                                                      "Macro 6",
+                                                      "Macro 7",
+                                                      "Macro 8",
                                                       "Amp EG",
                                                       "Filter EG",
                                                       "Voice LFO 1",
@@ -91,27 +105,29 @@ const char modsource_abberations[n_modsources][32] = {"Off",
                                                       "Scene LFO 4",
                                                       "Scene LFO 5",
                                                       "Scene LFO 6",
-                                                      "Timbre" /*,"Arpeggio"*/};
+                                                      "Timbre",
+                                                      "Release Velocity"
+                                                      /*,"Arpeggio"*/};
 
 const char modsource_abberations_short[n_modsources][32] = {
-    "off",   "velocity", "keytrack", "Poly AT", "Ch. AT", "Pitch Bend", "Modwheel", "CTRL1",
-    "CTRL2", "CTRL3",    "CTRL4",    "CTRL5",   "CTRL6",  "CTRL7",      "CTRL8",    "AEG",
-    "FEG",   "LFO1",     "LFO2",     "LFO3",    "LFO4",   "LFO5",       "LFO6",     "SLFO1",
-    "SLFO2", "SLFO3",    "SLFO4",    "SLFO5",   "SLFO6",  "TIMBR" /*,"Arpeggio"*/};
+    "Off", "Velocity", "Keytrack", "Poly AT", "Channel AT", "Pitch Bend", "Modwheel", "Ctrl 1",
+    "Ctrl 2", "Ctrl 3", "Ctrl 4", "Ctrl 5", "Ctrl 6", "Ctrl 7", "Ctrl 8", "Amp EG",
+    "Filter EG", "LFO 1", "LFO 2", "LFO 3", "LFO 4", "LFO 5", "LFO 6", "SLFO 1",
+    "SLFO 2", "SLFO 3", "SLFO 4", "SLFO 5", "SLFO 6", "Timbre", "Rel Vel" /*,"Arpeggio"*/};
 
 const int modsource_grid_xy[n_modsources][2] = {
     {0, 0}, {0, 0}, {1, 0}, {2, 0},  {3, 0}, {4, 0}, {5, 0},          // vel -> mw
     {7, 0}, {8, 0}, {9, 0}, {10, 0}, {7, 3}, {8, 3}, {9, 3}, {10, 3}, // ctrl 1-8
-    {6, 0}, {6, 2},                                                   // EGs
+    {6, 2}, {6, 4},                                                   // EGs
     {0, 2}, {1, 2}, {2, 2}, {3, 2},  {4, 2}, {5, 2},                  // LFO
     {0, 4}, {1, 4}, {2, 4}, {3, 4},  {4, 4}, {5, 4},                  // SLFO
-    {6, 4}                                                            // Timbre
+    {6, 0}, {0, 0}                                                            // Timbre, relvel is special
 };
 
 inline bool isScenelevel(modsources ms)
 {
    return ((ms <= ms_ctrl8) || ((ms >= ms_slfo1) && (ms <= ms_slfo6))) && (ms != ms_velocity) &&
-          (ms != ms_keytrack) && (ms != ms_polyaftertouch) && (ms != ms_timbre);
+      (ms != ms_keytrack) && (ms != ms_polyaftertouch) && (ms != ms_timbre) && (ms != ms_releasevelocity);
 }
 
 inline bool canModulateMonophonicTarget(modsources ms)
@@ -268,7 +284,7 @@ public:
    virtual void process_block() override
    {
       float b = fabs(target - output);
-      float a = 0.4f * b;
+      float a = 0.9f * 44100 * samplerate_inv * b;
       output = (1 - a) * output + a * target;
    }
 
@@ -280,7 +296,7 @@ public:
          output = target;
          return false; // this interpolator has reached it's target and is no longer needed
       }
-      float a = 0.4f * b;
+      float a = 0.9f * 44100 * samplerate_inv * b;
       output = (1 - a) * output + a * target;
       return true; // continue
    }

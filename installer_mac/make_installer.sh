@@ -25,11 +25,13 @@ fi
 
 # locations
 
-PRODUCTS="../products/"
+PRODUCTS="../build/surge_products/"
+FXPRODUCTS="../surge-fx/build/product/"
 
-VST2="Surge.vst"
 VST3="Surge.vst3"
 AU="Surge.component"
+FXAU="SurgeEffectsBank.component"
+FXVST3="SurgeEffectsBank.vst3"
 
 RSRCS="../resources/data"
 
@@ -44,6 +46,7 @@ build_flavor()
     flavorprod=$2
     ident=$3
     loc=$4
+    proddir=$5
 
     echo --- BUILDING Surge_${flavor}.pkg ---
     
@@ -55,30 +58,35 @@ build_flavor()
     # by moving the product to a tmp dir
 
     mkdir -p $TMPDIR
-    mv $PRODUCTS/$flavorprod $TMPDIR
+    mv $proddir/$flavorprod $TMPDIR
 
     pkgbuild --root $TMPDIR --identifier $ident --version $VERSION --install-location $loc Surge_${flavor}.pkg || exit 1
 
-    mv $TMPDIR/${flavorprod} $PRODUCTS
+    mv $TMPDIR/${flavorprod} $proddir
     rmdir $TMPDIR
 }
 
-# try to build VST2 package
-
-if [[ -d $PRODUCTS/$VST2 ]]; then
-    build_flavor "VST2" $VST2 "com.vemberaudio.vst2.pkg" "/Library/Audio/Plug-Ins/VST"
-fi
 
 # try to build VST3 package
 
 if [[ -d $PRODUCTS/$VST3 ]]; then
-    build_flavor "VST3" $VST3 "com.vemberaudio.vst3.pkg" "/Library/Audio/Plug-Ins/VST3"
+    build_flavor "VST3" $VST3 "com.vemberaudio.vst3.pkg" "/Library/Audio/Plug-Ins/VST3" $PRODUCTS
 fi
 
 # try to build AU package
 
 if [[ -d $PRODUCTS/$AU ]]; then
-    build_flavor "AU" $AU "com.vemberaudio.au.pkg" "/Library/Audio/Plug-Ins/Components"
+    build_flavor "AU" $AU "com.vemberaudio.au.pkg" "/Library/Audio/Plug-Ins/Components" $PRODUCTS
+fi
+
+# And the FXen
+
+if [[ -d $FXPRODUCTS/$FXAU ]]; then
+    build_flavor "FXAU" $FXAU "org.surge-synthesizer.fxau.pkg" "/Library/Audio/Plug-Ins/Components" $FXPRODUCTS
+fi
+
+if [[ -d $FXPRODUCTS/$FXVST3 ]]; then
+    build_flavor "FXVST3" $FXVST3 "org.surge-synthesizer.fxvst3.pkg" "/Library/Audio/Plug-Ins/VST3" $FXPRODUCTS
 fi
 
 # write build info to resources folder
@@ -90,6 +98,7 @@ echo "Commit: $(git rev-parse HEAD)" >> "$RSRCS/BuildInfo.txt"
 
 # build resources package
 
+echo --- BUILDING Resources pkg ---
 pkgbuild --root "$RSRCS" --identifier "com.vemberaudio.resources.pkg" --version $VERSION --scripts ResourcesPackageScript --install-location "/tmp/Surge" Surge_Resources.pkg
 
 # remove build info from resource folder
@@ -98,11 +107,6 @@ rm "$RSRCS/BuildInfo.txt"
 
 # create distribution.xml
 
-if [[ -d $PRODUCTS/$VST2 ]]; then
-	VST2_PKG_REF='<pkg-ref id="com.vemberaudio.vst2.pkg"/>'
-	VST2_CHOICE='<line choice="com.vemberaudio.vst2.pkg"/>'
-	VST2_CHOICE_DEF="<choice id=\"com.vemberaudio.vst2.pkg\" visible=\"true\" start_selected=\"true\" title=\"VST\"><pkg-ref id=\"com.vemberaudio.vst2.pkg\"/></choice><pkg-ref id=\"com.vemberaudio.vst2.pkg\" version=\"${VERSION}\" onConclusion=\"none\">Surge_VST2.pkg</pkg-ref>"
-fi
 if [[ -d $PRODUCTS/$VST3 ]]; then
 	VST3_PKG_REF='<pkg-ref id="com.vemberaudio.vst3.pkg"/>'
 	VST3_CHOICE='<line choice="com.vemberaudio.vst3.pkg"/>'
@@ -113,26 +117,40 @@ if [[ -d $PRODUCTS/$AU ]]; then
 	AU_CHOICE='<line choice="com.vemberaudio.au.pkg"/>'
 	AU_CHOICE_DEF="<choice id=\"com.vemberaudio.au.pkg\" visible=\"true\" start_selected=\"true\" title=\"Audio Unit\"><pkg-ref id=\"com.vemberaudio.au.pkg\"/></choice><pkg-ref id=\"com.vemberaudio.au.pkg\" version=\"${VERSION}\" onConclusion=\"none\">Surge_AU.pkg</pkg-ref>"
 fi
+if [[ -d $FXPRODUCTS/$FXAU ]]; then
+	FXAU_PKG_REF='<pkg-ref id="org.surge-synthesizer.fxau.pkg"/>'
+	FXAU_CHOICE='<line choice="org.surge-synthesizer.fxau.pkg"/>'
+	FXAU_CHOICE_DEF="<choice id=\"org.surge-synthesizer.fxau.pkg\" visible=\"true\" start_selected=\"true\" title=\"Audio Unit for Standalone FX\"><pkg-ref id=\"org.surge-synthesizer.fxau.pkg\"/></choice><pkg-ref id=\"org.surge-synthesizer.fxau.pkg\" version=\"${VERSION}\" onConclusion=\"none\">Surge_FXAU.pkg</pkg-ref>"
+fi
+if [[ -d $FXPRODUCTS/$FXVST3 ]]; then
+	FXVST3_PKG_REF='<pkg-ref id="org.surge-synthesizer.fxvst3.pkg"/>'
+	FXVST3_CHOICE='<line choice="org.surge-synthesizer.fxvst3.pkg"/>'
+	FXVST3_CHOICE_DEF="<choice id=\"org.surge-synthesizer.fxvst3.pkg\" visible=\"true\" start_selected=\"true\" title=\"VST3 for Standalone FX\"><pkg-ref id=\"org.surge-synthesizer.fxvst3.pkg\"/></choice><pkg-ref id=\"org.surge-synthesizer.fxvst3.pkg\" version=\"${VERSION}\" onConclusion=\"none\">Surge_FXVST3.pkg</pkg-ref>"
+fi
 
 cat > distribution.xml << XMLEND
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
     <title>Surge ${VERSION}</title>
     <license file="License.txt" />
-    ${VST2_PKG_REF}
+    <readme file="Readme.rtf" />
     ${VST3_PKG_REF}
     ${AU_PKG_REF}
+    ${FXVST3_PKG_REF}
+    ${FXAU_PKG_REF}
     <pkg-ref id="com.vemberaudio.resources.pkg"/>
     <options require-scripts="false" customize="always" />
     <choices-outline>
-        ${VST2_CHOICE}
         ${VST3_CHOICE}
         ${AU_CHOICE}
+        ${FXVST3_CHOICE}
+        ${FXAU_CHOICE}
         <line choice="com.vemberaudio.resources.pkg"/>
     </choices-outline>
-    ${VST2_CHOICE_DEF}
     ${VST3_CHOICE_DEF}
     ${AU_CHOICE_DEF}
+    ${FXVST3_CHOICE_DEF}
+    ${FXAU_CHOICE_DEF}
     <choice id="com.vemberaudio.resources.pkg" visible="true" enabled="false" selected="true" title="Install resources">
         <pkg-ref id="com.vemberaudio.resources.pkg"/>
     </choice>

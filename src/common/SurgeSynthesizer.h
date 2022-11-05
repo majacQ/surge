@@ -1,15 +1,29 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #pragma once
 #include "SurgeStorage.h"
 #include "SurgeVoice.h"
 #include "effect/Effect.h"
 #include "BiquadFilter.h"
+#include "UserInteractions.h"
 
 struct QuadFilterChainState;
 
 #include <list>
+#include <utility>
 #include <atomic>
 
 #if TARGET_AUDIOUNIT
@@ -21,6 +35,9 @@ typedef SurgeVst3Processor PluginLayer;
 #elif TARGET_VST2
 class Vst2PluginInstance;
 using PluginLayer = Vst2PluginInstance;
+#elif TARGET_LV2
+class SurgeLv2Wrapper;
+using PluginLayer = SurgeLv2Wrapper;
 #elif TARGET_HEADLESS
 class HeadlessPluginLayerProxy;
 using PluginLayer = HeadlessPluginLayerProxy;
@@ -31,6 +48,7 @@ class PluginLayer;
 struct timedata
 {
    double ppqPos, tempo;
+   int timeSigNumerator = 4, timeSigDenominator = 4;
 };
 
 struct parametermeta
@@ -44,6 +62,8 @@ class alignas(16) SurgeSynthesizer
 {
 public:
    float output alignas(16)[N_OUTPUTS][BLOCK_SIZE];
+   float sceneout alignas(16)[2][N_OUTPUTS][BLOCK_SIZE_OS]; // this is blocksize_os but has been downsampled by the end of process into block_size
+
    float input alignas(16)[N_INPUTS][BLOCK_SIZE];
    timedata time_data;
    bool audio_processing_active;
@@ -58,7 +78,7 @@ public:
 
    // methods
 public:
-   SurgeSynthesizer(PluginLayer* parent);
+   SurgeSynthesizer(PluginLayer* parent, std::string suppliedDataPath="");
    virtual ~SurgeSynthesizer();
    void playNote(char channel, char key, char velocity, char detune);
    void releaseNote(char channel, char key, char velocity);
@@ -123,19 +143,21 @@ public:
    //	float getParameter (long index);
    bool isValidModulation(long ptag, modsources modsource);
    bool isActiveModulation(long ptag, modsources modsource);
+   bool isBipolarModulation(modsources modsources);
    bool isModsourceUsed(modsources modsource);
    bool isModDestUsed(long moddest);
    ModulationRouting* getModRouting(long ptag, modsources modsource);
    bool setModulation(long ptag, modsources modsource, float value);
    float getModulation(long ptag, modsources modsource);
    float getModDepth(long ptag, modsources modsource);
-   void clearModulation(long ptag, modsources modsource);
+   void clearModulation(long ptag, modsources modsource, bool clearEvenIfInvalid = false);
    void clear_osc_modulation(
        int scene, int entry); // clear the modulation routings on the algorithm-specific sliders
    int remapExternalApiToInternalId(unsigned int x);
    int remapInternalToExternalApiId(unsigned int x);
    void getParameterDisplay(long index, char* text);
    void getParameterDisplay(long index, char* text, float x);
+   void getParameterDisplayAlt(long index, char* text);
    void getParameterName(long index, char* text);
    void getParameterMeta(long index, parametermeta& pm);
    void getParameterNameW(long index, wchar_t* ptr);
@@ -145,6 +167,7 @@ public:
    //	unsigned int getParameterFlags (long index);
    void loadRaw(const void* data, int size, bool preset = false);
    void loadPatch(int id);
+   bool loadPatchByPath(const char* fxpPath, int categoryId, const char* name );
    void incrementPatch(bool nextPrev);
    void incrementCategory(bool nextPrev);
 
@@ -167,8 +190,12 @@ public:
 
    float vu_peak[8];
 
+   void populateDawExtraState();
+   
+   void loadFromDawExtraState();
+   
 public:
-   int CC0, PCH, patchid;
+   int CC0, CC32, PCH, patchid;
    float masterfade = 0;
    HalfRateFilter halfbandA, halfbandB, halfbandIN;
    std::list<SurgeVoice*> voices[2];
@@ -194,7 +221,7 @@ public:
 
    // hold pedal stuff
 
-   std::list<int> holdbuffer[2];
+   std::list<std::pair<int,int>> holdbuffer[2];
    void purgeHoldbuffer(int scene);
    quadr_osc sinus;
    int demo_counter = 0;
