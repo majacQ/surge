@@ -25,7 +25,21 @@ SurgeSynthProcessor::SurgeSynthProcessor()
                          .withOutput("Scene A", AudioChannelSet::stereo(), false)
                          .withOutput("Scene B", AudioChannelSet::stereo(), false))
 {
-    std::cout << "SurgeXT : Version " << Surge::Build::FullVersionStr << std::endl;
+    std::cout << "SurgeXT Startup\n"
+              << "  - Version      : " << Surge::Build::FullVersionStr << "\n"
+              << "  - Build Info   : " << Surge::Build::BuildArch << " "
+              << Surge::Build::BuildCompiler << "\n"
+              << "  - Build Time   : " << Surge::Build::BuildDate << " " << Surge::Build::BuildTime
+              << "\n"
+              << "  - JUCE Version : " << std::hex << JUCE_VERSION << std::dec << "\n"
+#if SURGE_JUCE_ACCESSIBLE
+              << "  - Accessiblity : Enabled\n"
+#endif
+#if SURGE_JUCE_HOST_CONTEXT
+              << "  - JUCE Host Context Support Enabled\n"
+#endif
+              << "  - CPU          : " << Surge::CPUFeatures::cpuBrand() << std::endl;
+
     surge = std::make_unique<SurgeSynthesizer>(this);
     surge->storage.initializePatchDb(); // In the UI branch we want the patch DB running
 
@@ -72,6 +86,8 @@ SurgeSynthProcessor::SurgeSynthProcessor()
 
     surge->hostProgram = juce::PluginHostType().getHostDescription();
     surge->juceWrapperType = getWrapperTypeDescription(wrapperType);
+
+    midiKeyboardState.addListener(this);
 
     SurgeSynthProcessorSpecificExtensions(this, surge.get());
 }
@@ -127,6 +143,7 @@ void SurgeSynthProcessor::changeProgramName(int index, const String &newName) {}
 void SurgeSynthProcessor::prepareToPlay(double sr, int samplesPerBlock)
 {
     surge->setSamplerate(sr);
+    surge->audio_processing_active = true;
 }
 
 void SurgeSynthProcessor::releaseResources()
@@ -137,20 +154,27 @@ void SurgeSynthProcessor::releaseResources()
 
 bool SurgeSynthProcessor::isBusesLayoutSupported(const BusesLayout &layouts) const
 {
-    // the sidechain can take any layout, the main bus needs to be the same on the input and output
-    return layouts.getMainInputChannelSet() == layouts.getMainOutputChannelSet() &&
-           !layouts.getMainInputChannelSet().isDisabled() &&
-           layouts.getMainInputChannelSet() == AudioChannelSet::stereo();
-}
+    auto mocs = layouts.getMainOutputChannelSet();
+    auto mics = layouts.getMainInputChannelSet();
 
-#define is_aligned(POINTER, BYTE_COUNT) (((uintptr_t)(const void *)(POINTER)) % (BYTE_COUNT) == 0)
+    auto outputValid = (mocs == AudioChannelSet::stereo()) || mocs.isDisabled();
+    auto inputValid = (mics == AudioChannelSet::stereo()) || (mics == AudioChannelSet::mono()) ||
+                      (mics.isDisabled());
+
+    /*
+     * Check the 6 output shape
+     */
+    auto c1 = layouts.getNumChannels(false, 1);
+    auto c2 = layouts.getNumChannels(false, 2);
+    auto sceneOut = (c1 == 0 && c2 == 0) || (c1 == 2 && c2 == 2);
+
+    return outputValid && inputValid && sceneOut;
+}
 
 void SurgeSynthProcessor::processBlock(AudioBuffer<float> &buffer, MidiBuffer &midiMessages)
 {
     auto fpuguard = Surge::CPUFeatures::FPUStateGuard();
 
-    // FIXME obvioulsy
-    float thisBPM = 120.0;
     auto playhead = getPlayHead();
     if (playhead)
     {
@@ -167,7 +191,7 @@ void SurgeSynthProcessor::processBlock(AudioBuffer<float> &buffer, MidiBuffer &m
     }
     else
     {
-        surge->time_data.tempo = 120;
+        surge->time_data.tempo = standaloneTempo;
         surge->time_data.timeSigNumerator = 4;
         surge->time_data.timeSigDenominator = 4;
         surge->resetStateFromTimeData();
@@ -177,6 +201,8 @@ void SurgeSynthProcessor::processBlock(AudioBuffer<float> &buffer, MidiBuffer &m
     {
         MidiMessage m = it.getMessage();
         const int ch = m.getChannel() - 1;
+        juce::ScopedValueSetter<bool> midiAdd(isAddingFromMidi, true);
+        midiKeyboardState.processNextMidiEvent(m);
 
         if (m.isNoteOn())
         {
@@ -212,26 +238,54 @@ void SurgeSynthProcessor::processBlock(AudioBuffer<float> &buffer, MidiBuffer &m
         }
     }
 
-    auto mainInputOutput = getBusBuffer(buffer, true, 0);
+    midiR rec;
+    while (midiFromGUI.pop(rec))
+    {
+        if (rec.on)
+            surge->playNote(rec.ch, rec.note, rec.vel, 0);
+        else
+            surge->releaseNote(rec.ch, rec.note, rec.vel);
+    }
+
+    // Make sure we have a main output
+    auto mb = getBus(false, 0);
+    if (mb->getNumberOfChannels() != 2 || !mb->isEnabled())
+    {
+        // We have to have a stereo output
+        return;
+    }
+    auto mainOutput = getBusBuffer(buffer, false, 0);
+
+    auto mainInput = getBusBuffer(buffer, true, 0);
     auto sceneAOutput = getBusBuffer(buffer, false, 1);
     auto sceneBOutput = getBusBuffer(buffer, false, 2);
     for (int i = 0; i < buffer.getNumSamples(); i++)
     {
-        auto outL = mainInputOutput.getWritePointer(0, i);
-        auto outR = mainInputOutput.getWritePointer(1, i);
+        auto outL = mainOutput.getWritePointer(0, i);
+        auto outR = mainOutput.getWritePointer(1, i);
 
         surge->time_data.ppqPos += (double)BLOCK_SIZE * surge->time_data.tempo / (60. * samplerate);
 
-        if (blockPos == 0)
+        if (blockPos == 0 && mainInput.getNumChannels() > 0)
         {
-            auto inL = mainInputOutput.getReadPointer(0, i);
-            auto inR = mainInputOutput.getReadPointer(1, i);
+            auto inL = mainInput.getReadPointer(0, i);
+            auto inR = inL;                     // assume mono
+            if (mainInput.getNumChannels() > 1) // unless its not
+            {
+                inR = mainInput.getReadPointer(1, i);
+            }
             surge->process_input = true;
             memcpy(&(surge->input[0][0]), inL, BLOCK_SIZE * sizeof(float));
             memcpy(&(surge->input[1][0]), inR, BLOCK_SIZE * sizeof(float));
+        }
+        else
+        {
+            surge->process_input = false;
+        }
+        if (blockPos == 0)
+        {
             surge->process();
         }
-
         *outL = surge->output[0][blockPos];
         *outR = surge->output[1][blockPos];
 
@@ -337,6 +391,20 @@ std::string SurgeSynthProcessor::paramClumpName(int clumpid)
         return "Scene B LFOs";
     }
     return "";
+}
+
+void SurgeSynthProcessor::handleNoteOn(MidiKeyboardState *source, int midiChannel,
+                                       int midiNoteNumber, float velocity)
+{
+    if (!isAddingFromMidi)
+        midiFromGUI.push(midiR(midiChannel, midiNoteNumber, velocity, true));
+}
+
+void SurgeSynthProcessor::handleNoteOff(MidiKeyboardState *source, int midiChannel,
+                                        int midiNoteNumber, float velocity)
+{
+    if (!isAddingFromMidi)
+        midiFromGUI.push(midiR(midiChannel, midiNoteNumber, velocity, false));
 }
 
 //==============================================================================

@@ -15,7 +15,7 @@
 
 #include "SurgeStorage.h"
 #include "Parameter.h"
-#include "DspUtilities.h"
+#include "DSPUtils.h"
 #include <cstring>
 #include <iomanip>
 #include <sstream>
@@ -474,6 +474,7 @@ void Parameter::set_user_data(ParamUserData *ud)
     case ct_airwindows_param:
     case ct_airwindows_param_bipolar:
     case ct_airwindows_param_integral:
+    case ct_percent_bipolar_w_dynamic_unipolar_formatting:
         if (dynamic_cast<ParameterExternalFormatter *>(ud))
         {
             user_data = ud;
@@ -1771,9 +1772,9 @@ const char *Parameter::get_full_name()
     return fullname;
 }
 
-const char *Parameter::get_internal_name() { return name; }
+const char *Parameter::get_internal_name() const { return name; }
 
-const char *Parameter::get_storage_name() { return name_storage; }
+const char *Parameter::get_storage_name() const { return name_storage; }
 
 char *Parameter::get_storage_value(char *str)
 {
@@ -2771,6 +2772,20 @@ void Parameter::get_display_alt(char *txt, bool external, float ef)
         snprintf(txt, TXT_SIZE, "%s", bin.c_str());
         break;
     }
+    case ct_percent_bipolar_w_dynamic_unipolar_formatting:
+    {
+        auto ef = dynamic_cast<ParameterExternalFormatter *>(user_data);
+        if (ef)
+        {
+            float f;
+            char tmptxt[TXT_SIZE];
+            if (ef->formatAltValue(this, val.f, tmptxt, TXT_SIZE))
+            {
+                strncpy(txt, tmptxt, TXT_SIZE);
+                break;
+            }
+        }
+    }
     }
 }
 
@@ -2816,8 +2831,8 @@ void Parameter::get_display(char *txt, bool external, float ef)
             {
                 // parameter called 'len' not 'size', be on the safe side here, do - 1.
                 // It used to say just '64' anyway.
-                ef->formatValue(f, txt, TXT_SIZE - 1);
-                return;
+                if (ef->formatValue(this, f, txt, TXT_SIZE - 1))
+                    return;
             }
             // We do not break on purpose here. DelegatedToFormatter falls back to Linear with Scale
         }
@@ -2994,9 +3009,11 @@ void Parameter::get_display(char *txt, bool external, float ef)
             auto ef = dynamic_cast<ParameterExternalFormatter *>(user_data);
             if (ef)
             {
-                ef->formatValue(fv, vt, TXT_SIZE - 1);
-                snprintf(txt, TXT_SIZE, "%s", vt);
-                return;
+                if (ef->formatValue(this, fv, vt, TXT_SIZE - 1))
+                {
+                    snprintf(txt, TXT_SIZE, "%s", vt);
+                    return;
+                }
             }
         }
         switch (ctrltype)
@@ -3124,7 +3141,14 @@ void Parameter::get_display(char *txt, bool external, float ef)
                             case fut_SNH:
                                 snprintf(txt, TXT_SIZE, "%s", fut_def_subtypes[i]);
                                 break;
-
+                            case fut_threeler:
+                                // "i & 3" selects the lower two bits that represent the filter
+                                // mode.
+                                // "(i >> 2) & 3" selects the next two bits that represent the
+                                // output stage.
+                                snprintf(txt, TXT_SIZE, "%s, %s", fut_threeler_subtypes[i & 3],
+                                         fut_threeler_output_stage[(i >> 2) & 3]);
+                                break;
                             case n_fu_types:
                                 snprintf(txt, TXT_SIZE, "ERROR");
                                 break;
@@ -3846,7 +3870,7 @@ bool Parameter::set_value_from_string_onto(std::string s, pdata &onto)
         if (ef)
         {
             float f;
-            if (ef->stringToValue(c, f))
+            if (ef->stringToValue(this, c, f))
             {
                 onto.f = limit_range(f, val_min.f, val_max.f);
                 return true;

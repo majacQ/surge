@@ -14,6 +14,7 @@
 
 #include "SurgeSynthesizer.h"
 #include "SurgeStorage.h"
+#include "LockFreeStack.h"
 
 #include <functional>
 #include <unordered_map>
@@ -57,7 +58,33 @@ struct SurgeParamToJuceParamAdapter : juce::RangedAudioParameter
         if (f != getValue())
             s->setParameter01(s->idForParameter(p), f, true);
     }
-    float getValueForText(const juce::String &text) const override { return 0; }
+    int getNumSteps() const override { return RangedAudioParameter::getNumSteps(); }
+    float getValueForText(const juce::String &text) const override
+    {
+        pdata onto;
+        if (p->set_value_from_string_onto(text.toStdString(), onto))
+        {
+            if (p->valtype == vt_float)
+                return onto.f;
+            if (p->valtype == vt_int)
+                return onto.i;
+            if (p->valtype == vt_bool)
+                return onto.b;
+        }
+        return 0;
+    }
+    juce::String getCurrentValueAsText() const override
+    {
+        char txt[TXT_SIZE];
+        p->get_display(txt);
+        return txt;
+    }
+    juce::String getText(float normalisedValue, int i) const override
+    {
+        char txt[TXT_SIZE];
+        p->get_display(txt, true, normalisedValue);
+        return txt;
+    }
     bool isMetaParameter() const override { return true; }
     const juce::NormalisableRange<float> &getNormalisableRange() const override { return range; }
     juce::NormalisableRange<float> range;
@@ -65,7 +92,9 @@ struct SurgeParamToJuceParamAdapter : juce::RangedAudioParameter
     Parameter *p;
 };
 
-class SurgeSynthProcessor : public juce::AudioProcessor, public SurgeSynthesizer::PluginLayer
+class SurgeSynthProcessor : public juce::AudioProcessor,
+                            public SurgeSynthesizer::PluginLayer,
+                            public juce::MidiKeyboardState::Listener
 {
   public:
     //==============================================================================
@@ -83,6 +112,21 @@ class SurgeSynthProcessor : public juce::AudioProcessor, public SurgeSynthesizer
     //==============================================================================
     juce::AudioProcessorEditor *createEditor() override;
     bool hasEditor() const override;
+
+    std::atomic<float> standaloneTempo{120};
+    struct midiR
+    {
+        midiR() {}
+        midiR(int c, int n, int v, bool o) : ch(c), note(n), vel(v), on(o) {}
+        int ch{0}, note{0}, vel{0};
+        bool on{false};
+    };
+    LockFreeStack<midiR, 4096> midiFromGUI;
+    bool isAddingFromMidi{false};
+    void handleNoteOn(juce::MidiKeyboardState *source, int midiChannel, int midiNoteNumber,
+                      float velocity) override;
+    void handleNoteOff(juce::MidiKeyboardState *source, int midiChannel, int midiNoteNumber,
+                       float velocity) override;
 
     //==============================================================================
     const juce::String getName() const override;
@@ -109,6 +153,7 @@ class SurgeSynthProcessor : public juce::AudioProcessor, public SurgeSynthesizer
     std::unordered_map<SurgeSynthesizer::ID, SurgeParamToJuceParamAdapter *> paramsByID;
 
     std::string paramClumpName(int clumpid);
+    juce::MidiKeyboardState midiKeyboardState;
 
   private:
     std::vector<SurgeParamToJuceParamAdapter *> paramAdapters;

@@ -10,8 +10,6 @@
 
 #pragma once
 
-#include "efvg/escape_from_vstgui.h"
-
 #include <JuceHeader.h>
 
 #include "SurgeSynthProcessor.h"
@@ -24,16 +22,18 @@ class SurgeJUCELookAndFeel;
  */
 class SurgeSynthEditor : public juce::AudioProcessorEditor,
                          public juce::AsyncUpdater,
-                         public EscapeFromVSTGUI::JuceVSTGUIEditorAdapter,
                          public juce::FileDragAndDropTarget
 {
   public:
     SurgeSynthEditor(SurgeSynthProcessor &);
     ~SurgeSynthEditor();
 
+    static constexpr int extraYSpaceForVirtualKeyboard = 50;
+
     //==============================================================================
     void paint(juce::Graphics &) override;
     void resized() override;
+    void parentHierarchyChanged() override;
 
     void paramsChangedCallback();
     void setEffectType(int i);
@@ -56,9 +56,18 @@ class SurgeSynthEditor : public juce::AudioProcessorEditor,
     void idle();
     std::unique_ptr<IdleTimer> idleTimer;
 
+    bool drawExtendedControls{false};
+    std::unique_ptr<juce::MidiKeyboardComponent> keyboard;
+    std::unique_ptr<juce::Label> tempoLabel;
+    std::unique_ptr<juce::TextEditor> tempoTypein;
+
     /* Drag and drop */
     bool isInterestedInFileDrag(const juce::StringArray &files) override;
     void filesDropped(const juce::StringArray &files, int, int) override;
+
+    juce::PopupMenu hostMenuFor(Parameter *p);
+
+    friend class SurgeGUIEditor;
 
   private:
     // This reference is provided as a quick way for your editor to
@@ -66,8 +75,6 @@ class SurgeSynthEditor : public juce::AudioProcessorEditor,
     SurgeSynthProcessor &processor;
 
     std::unique_ptr<SurgeGUIEditor> adapter;
-
-    std::unique_ptr<VSTGUI::CFrame> vstguiFrame;
     std::unique_ptr<juce::Drawable> logo;
 
     std::unique_ptr<SurgeJUCELookAndFeel> surgeLF;

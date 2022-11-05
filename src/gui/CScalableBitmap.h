@@ -18,8 +18,8 @@
 class CScalableBitmap : public VSTGUI::CBitmap
 {
   public:
-    CScalableBitmap(VSTGUI::CResourceDescription d, VSTGUI::CFrame *f);
-    CScalableBitmap(std::string fname, VSTGUI::CFrame *f);
+    CScalableBitmap(VSTGUI::CResourceDescription d);
+    CScalableBitmap(std::string fname);
     ~CScalableBitmap();
 
     virtual void draw(VSTGUI::CDrawContext *context, const VSTGUI::CRect &rect,
@@ -54,7 +54,7 @@ class CScalableBitmap : public VSTGUI::CBitmap
     */
     void setExtraScaleFactor(int a) { extraScaleFactor = a; }
 
-    int resourceID;
+    int resourceID = -1;
     std::string fname;
 
   private:
@@ -62,8 +62,6 @@ class CScalableBitmap : public VSTGUI::CBitmap
 
     int lastSeenZoom, bestFitScaleGroup;
     int extraScaleFactor;
-
-    VSTGUI::CFrame *frame;
 
     /*
      * The zoom 100 bitmap and optional higher resolution bitmaps for zooms

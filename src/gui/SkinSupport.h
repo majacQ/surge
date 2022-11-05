@@ -14,15 +14,7 @@
 #include "DebugHelpers.h"
 #include "globals.h"
 
-#if ESCAPE_FROM_VSTGUI
 #include "efvg/escape_from_vstgui.h"
-#else
-#include "vstgui/lib/ccolor.h"
-#include "vstgui/lib/crect.h"
-#include "vstgui/lib/cpoint.h"
-#include "vstgui/lib/cdrawdefs.h"
-#include "vstgui/lib/cfont.h"
-#endif
 
 #include "SkinModel.h"
 #include "SkinColors.h"
@@ -83,13 +75,11 @@ template <typename T> class Maybe
     T _value;
 };
 
-namespace UI
+namespace GUI
 {
 
-/*
- * This function is defined in SkinFontLoader.cpp
- */
-void addFontSearchPathToSystem(const fs::path &p);
+void loadTypefacesFromPath(const fs::path &p,
+                           std::unordered_map<std::string, juce::Typeface::Ptr> &result);
 
 extern const std::string NoneClassName;
 class SkinDB;
@@ -126,8 +116,9 @@ class Skin
     }
 
     static bool setAllCapsProperty(std::string propertyValue);
-    static int setFontStyleProperty(std::string propertyValue);
+    static juce::Font::FontStyleFlags setFontStyleProperty(std::string propertyValue);
     static VSTGUI::CHoriTxtAlign setTextAlignProperty(std::string propertyValue);
+    static juce::Justification setJuceTextAlignProperty(std::string propertyValue);
 
     std::string root;
     std::string name;
@@ -146,8 +137,13 @@ class Skin
 
     struct Control
     {
+        typedef uint64_t sessionid_t;
         typedef std::shared_ptr<Control> ptr_t;
         int x, y, w, h;
+
+        Control();
+
+        sessionid_t sessionid;
 
         Surge::Skin::Component defaultComponent;
 
@@ -202,37 +198,37 @@ class Skin
     };
 
     bool hasColor(const std::string &id) const;
-    VSTGUI::CColor
-    getColor(const std::string &id, const VSTGUI::CColor &def,
+    juce::Colour
+    getColor(const std::string &id, const juce::Colour &def,
              std::unordered_set<std::string> noLoops = std::unordered_set<std::string>()) const;
-    VSTGUI::CColor
+    juce::Colour
     getColor(const std::string &id, const Surge::Skin::Color &def,
              std::unordered_set<std::string> noLoops = std::unordered_set<std::string>()) const
     {
-        return getColor(id, VSTGUI::CColor(def.r, def.g, def.b, def.a), noLoops);
+        return getColor(id, juce::Colour(def.r, def.g, def.b, def.a), noLoops);
     }
 
-    VSTGUI::CColor getColor(const std::string &id)
+    juce::Colour getColor(const std::string &id)
     {
         return getColor(id, Surge::Skin::Color::colorByName(id));
     }
 
-    VSTGUI::CColor colorFromHexString(const std::string &hex) const;
+    juce::Colour colorFromHexString(const std::string &hex) const;
 
   private:
-    VSTGUI::CColor
-    getColor(const Surge::Skin::Color &id, const VSTGUI::CColor &def,
+    juce::Colour
+    getColor(const Surge::Skin::Color &id, const juce::Colour &def,
              std::unordered_set<std::string> noLoops = std::unordered_set<std::string>()) const
     {
         return getColor(id.name, def, noLoops);
     }
 
   public:
-    VSTGUI::CColor
+    juce::Colour
     getColor(const Surge::Skin::Color &id,
              std::unordered_set<std::string> noLoops = std::unordered_set<std::string>()) const
     {
-        return getColor(id, VSTGUI::CColor(id.r, id.g, id.b, id.a), noLoops);
+        return getColor(id, juce::Colour(id.r, id.g, id.b, id.a), noLoops);
     }
 
     bool hasColor(const Surge::Skin::Color &col) const { return hasColor(col.name); }
@@ -260,7 +256,7 @@ class Skin
         auto res = controlForUIID(c.payload->id);
         if (!res)
         {
-            res = std::make_shared<Surge::UI::Skin::Control>();
+            res = std::make_shared<Surge::GUI::Skin::Control>();
             res->copyFromConnector(c, getVersion());
             // resolveBaseParentOffsets( res );
             controls.push_back(res);
@@ -336,9 +332,18 @@ class Skin
         HOVER_OVER_ON,
     } HoverType;
 
+    std::string hoverImageIdForResource(const int resource, HoverType t);
     CScalableBitmap *
     hoverBitmapOverlayForBackgroundBitmap(Skin::Control::ptr_t c, CScalableBitmap *b,
                                           std::shared_ptr<SurgeBitmaps> bitmapStore, HoverType t);
+
+    std::array<juce::Drawable *, 3>
+    standardHoverAndHoverOnForControl(Skin::Control::ptr_t c, std::shared_ptr<SurgeBitmaps> b);
+    std::array<juce::Drawable *, 3> standardHoverAndHoverOnForIDB(int id,
+                                                                  std::shared_ptr<SurgeBitmaps> b);
+    std::array<juce::Drawable *, 3> standardHoverAndHoverOnForCSB(CScalableBitmap *csb,
+                                                                  Skin::Control::ptr_t c,
+                                                                  std::shared_ptr<SurgeBitmaps> b);
 
     std::vector<Skin::Control::ptr_t> getLabels() const
     {
@@ -355,6 +360,8 @@ class Skin
 
     static const std::string defaultImageIDPrefix;
 
+    std::unordered_map<std::string, juce::Typeface::Ptr> typeFaces;
+
   private:
     static std::atomic<int> instances;
     struct GlobalPayload
@@ -369,7 +376,7 @@ class Skin
 
     struct ColorStore
     {
-        VSTGUI::CColor color;
+        juce::Colour color;
         std::string alias;
 
         typedef enum
@@ -380,8 +387,8 @@ class Skin
         } Type;
 
         Type type;
-        ColorStore() : type(COLOR), color(VSTGUI::kBlackCColor) {}
-        ColorStore(VSTGUI::CColor c) : type(COLOR), color(c) {}
+        ColorStore() : type(COLOR), color(juce::Colours::black) {}
+        ColorStore(juce::Colour c) : type(COLOR), color(c) {}
         ColorStore(std::string a) : type(ALIAS), alias(a) {}
         ColorStore(std::string a, Type t) : type(t), alias(a) {}
     };
@@ -482,10 +489,14 @@ class SkinConsumingComponent
     virtual void setSkin(Skin::ptr_t s, std::shared_ptr<SurgeBitmaps> b) { setSkin(s, b, nullptr); }
     virtual void setSkin(Skin::ptr_t s, std::shared_ptr<SurgeBitmaps> b, Skin::Control::ptr_t c)
     {
+        bool changed = (skin != s) || (associatedBitmapStore != b) || (skinControl != c);
         skin = s;
         associatedBitmapStore = b;
         skinControl = c;
-        onSkinChanged();
+        if (changed)
+        {
+            onSkinChanged();
+        }
     }
 
     virtual void onSkinChanged() {}
@@ -495,5 +506,5 @@ class SkinConsumingComponent
     Skin::Control::ptr_t skinControl = nullptr;
     std::shared_ptr<SurgeBitmaps> associatedBitmapStore = nullptr;
 };
-} // namespace UI
+} // namespace GUI
 } // namespace Surge

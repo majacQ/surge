@@ -14,7 +14,7 @@
 */
 
 #include "SurgeSynthesizer.h"
-#include "DspUtilities.h"
+#include "DSPUtils.h"
 #include <ctime>
 #include "CPUFeatures.h"
 #if MAC || LINUX
@@ -28,7 +28,7 @@
 
 #include "UserDefaults.h"
 #include "filesystem/import.h"
-#include "effect/Effect.h"
+#include "Effect.h"
 
 #include <thread>
 #include "libMTSClient.h"
@@ -39,16 +39,6 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedData
     : storage(suppliedDataPath), hpA(&storage), hpB(&storage), _parent(parent), halfbandA(6, true),
       halfbandB(6, true), halfbandIN(6, true)
 {
-    // Remember CPU features works on ARM also
-    if (!Surge::CPUFeatures::hasAVX())
-    {
-        storage.reportError(
-            "Surge XT in the future will require processor with AVX extensions. Surge Xt may"
-            " not work on this hardware in future versions. Enjoy Surge 1.9!",
-            "CPU Incompatability");
-        // Try anyway
-    }
-
     switch_toggled_queued = false;
     audio_processing_active = false;
     halt_engine = false;
@@ -90,8 +80,7 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedData
 
     for (int sc = 0; sc < n_scenes; sc++)
     {
-        FBQ[sc] = (QuadFilterChainState *)_aligned_malloc(
-            (MAX_VOICES >> 2) * sizeof(QuadFilterChainState), 16);
+        FBQ[sc] = new QuadFilterChainState[MAX_VOICES >> 2]();
 
         for (int i = 0; i < (MAX_VOICES >> 2); ++i)
         {
@@ -155,8 +144,8 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedData
 
         for (int l = 0; l < n_lfos_scene; l++)
         {
-            scene.modsources[ms_slfo1 + l] = new LfoModulationSource();
-            ((LfoModulationSource *)scene.modsources[ms_slfo1 + l])
+            scene.modsources[ms_slfo1 + l] = new LFOModulationSource();
+            ((LFOModulationSource *)scene.modsources[ms_slfo1 + l])
                 ->assign(&storage, &scene.lfo[n_lfos_voice + l], storage.getPatch().scenedata[sc],
                          0, &patch.stepsequences[sc][n_lfos_voice + l],
                          &patch.msegs[sc][n_lfos_voice + l],
@@ -236,6 +225,21 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedData
     storage.mpePitchBendRange =
         (float)Surge::Storage::getUserDefaultValue(&storage, Surge::Storage::MPEPitchBendRange, 48);
     mpeGlobalPitchBendRange = 0;
+
+    int pid = 0;
+    for (auto p : storage.patch_list)
+    {
+        if (p.name == storage.initPatchName &&
+            storage.patch_category[p.category].name == storage.initPatchCategory)
+        {
+            patchid_queue = pid;
+            break;
+        }
+        pid++;
+    }
+    if (patchid_queue >= 0)
+        processThreadunsafeOperations(true); // DANGER MODE IS ON
+    patchid_queue = -1;
 }
 
 SurgeSynthesizer::~SurgeSynthesizer()
@@ -244,7 +248,7 @@ SurgeSynthesizer::~SurgeSynthesizer()
 
     for (int sc = 0; sc < n_scenes; sc++)
     {
-        _aligned_free(FBQ[sc]);
+        delete[] FBQ[sc];
     }
 
     for (int sc = 0; sc < n_scenes; sc++)
@@ -1718,7 +1722,6 @@ void SurgeSynthesizer::allNotesOff()
         list<SurgeVoice *>::const_iterator iter;
         for (iter = voices[s].begin(); iter != voices[s].end(); iter++)
         {
-            //_aligned_free(*iter);
             freeVoice(*iter);
         }
         voices[s].clear();
@@ -3086,9 +3089,9 @@ DWORD WINAPI loadPatchInBackgroundThread(LPVOID lpParam)
     return 0;
 }
 
-void SurgeSynthesizer::processThreadunsafeOperations()
+void SurgeSynthesizer::processThreadunsafeOperations(bool dangerMode)
 {
-    if (!audio_processing_active)
+    if (!audio_processing_active || dangerMode)
     {
         // if the audio processing is inactive, patchloading should occur anyway
         if (patchid_queue >= 0)
@@ -3457,7 +3460,6 @@ void SurgeSynthesizer::process()
 
             if (!resume)
             {
-                //_aligned_free(v);
                 freeVoice(v);
                 iter = voices[s].erase(iter);
             }
@@ -3868,11 +3870,11 @@ void SurgeSynthesizer::setupActivateExtraOutputs()
 
 void SurgeSynthesizer::swapMetaControllers(int c1, int c2)
 {
-    char nt[20];
-    strxcpy(nt, storage.getPatch().CustomControllerLabel[c1], 16);
+    char nt[CUSTOM_CONTROLLER_LABEL_SIZE + 4];
+    strxcpy(nt, storage.getPatch().CustomControllerLabel[c1], CUSTOM_CONTROLLER_LABEL_SIZE);
     strxcpy(storage.getPatch().CustomControllerLabel[c1],
-            storage.getPatch().CustomControllerLabel[c2], 16);
-    strxcpy(storage.getPatch().CustomControllerLabel[c2], nt, 16);
+            storage.getPatch().CustomControllerLabel[c2], CUSTOM_CONTROLLER_LABEL_SIZE);
+    strxcpy(storage.getPatch().CustomControllerLabel[c2], nt, CUSTOM_CONTROLLER_LABEL_SIZE);
 
     storage.modRoutingMutex.lock();
 

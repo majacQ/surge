@@ -21,7 +21,6 @@
 #include <algorithm>
 
 #if MAC
-#include "vt_dsp/macspecific.h"
 
 #if defined(__x86_64__)
 #else
@@ -42,14 +41,6 @@
 #include <strings.h>
 
 static inline int _stricmp(const char *s1, const char *s2) { return strcasecmp(s1, s2); }
-#endif
-
-#if MAC
-#define _aligned_malloc(size, alignment) malloc(size)
-#define _aligned_free(memblock) free(memblock)
-#elif LINUX
-#define _aligned_malloc(size, alignment) aligned_alloc((alignment), (size))
-#define _aligned_free(memblock) free(memblock)
 #endif
 
 #define _SURGE_STR(x) #x

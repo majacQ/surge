@@ -42,9 +42,8 @@ void savePresetToUser(const fs::path &location, SurgeStorage *s, int scene, int 
         containingPath = containingPath / fs::path{"Step Seq"};
     else if (lfotype == lt_envelope)
         containingPath = containingPath / fs::path{"Envelope"};
-    else if (lfotype == lt_function)
-        // TODO FIXME: When function LFO type is added, adjust this condition!
-        containingPath = containingPath / fs::path{"Envelope"};
+    else if (lfotype == lt_formula)
+        containingPath = containingPath / fs::path{"Formula"};
     else
         containingPath = containingPath / fs::path{"LFO"};
 
@@ -100,6 +99,12 @@ void savePresetToUser(const fs::path &location, SurgeStorage *s, int scene, int 
         TiXmlElement ss("sequence");
         s->getPatch().stepSeqToXmlElement(&(s->getPatch().stepsequences[scene][lfoid]), ss, true);
         lfox.InsertEndChild(ss);
+    }
+    if (lfotype == lt_formula)
+    {
+        TiXmlElement fm("formula");
+        s->getPatch().formulaToXMLElement(&(s->getPatch().formulamods[scene][lfoid]), fm);
+        lfox.InsertEndChild(fm);
     }
 
     doc.InsertEndChild(lfox);
@@ -207,11 +212,21 @@ void loadPresetFrom(const fs::path &location, SurgeStorage *s, int scene, int lf
         if (msn)
             s->getPatch().stepSeqFromXmlElement(&(s->getPatch().stepsequences[scene][lfoid]), msn);
     }
+
+    if (lfotype == lt_formula)
+    {
+        auto frm = lfox->FirstChildElement("formula");
+        if (frm)
+            s->getPatch().formulaFromXMLElement(&(s->getPatch().formulamods[scene][lfoid]), frm);
+    }
 }
 
 static std::vector<Category> scanedPresets;
 static bool haveScanedPresets = false;
 
+/*
+ * Note: Clients rely on this being sorted by category path if you change it
+ */
 std::vector<Category> getPresets(SurgeStorage *s)
 {
     if (haveScanedPresets)

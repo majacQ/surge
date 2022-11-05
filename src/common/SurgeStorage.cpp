@@ -13,14 +13,14 @@
 ** open source in September 2018.
 */
 
-#include "DspUtilities.h"
+#include "DSPUtils.h"
 #include "SurgeStorage.h"
 #include <set>
 #include <numeric>
 #include <cctype>
 #include <map>
 #include <queue>
-#include <vt_dsp/vt_dsp_endian.h>
+#include <vembertech/vt_dsp_endian.h>
 #include "UserDefaults.h"
 #include "SurgeCoreBinary.h"
 
@@ -99,6 +99,24 @@ std::string getDLLPath()
 
 SurgeStorage::SurgeStorage(std::string suppliedDataPath) : otherscene_clients(0)
 {
+    if (samplerate == 0)
+    {
+        setSamplerate(48000);
+    }
+    else if (samplerate < 12000 || samplerate > 48000 * 32)
+    {
+        std::ostringstream oss;
+        oss << "Warning: SurgeStorage constructed with invalid samplerate :" << samplerate
+            << " - resetting to 48000 until Audio System tells us otherwise" << std::endl;
+        reportError(oss.str(), "SampleRate Corrputed on Startup");
+        setSamplerate(48000);
+    }
+    else
+    {
+        // Just in case, make sure we are completely consistent in all tables etc
+        setSamplerate(samplerate);
+    }
+
     _patch.reset(new SurgePatch(this));
 
     float cutoff = 0.455f;
@@ -217,6 +235,13 @@ SurgeStorage::SurgeStorage(std::string suppliedDataPath) : otherscene_clients(0)
 
 #if MAC
     char path[1024];
+    const char *buildOverrideDataPath = getenv("PIPELINE_OVERRIDE_DATA_HOME");
+    if (buildOverrideDataPath)
+    {
+        hasSuppliedDataPath = true;
+        suppliedDataPath = buildOverrideDataPath;
+    }
+
     if (!hasSuppliedDataPath)
     {
         FSRef foundRef;
@@ -619,6 +644,11 @@ bailOnPortable:
         oddsound_mts_client = nullptr;
         oddsound_mts_active = false;
     }
+
+    initPatchName =
+        Surge::Storage::getUserDefaultValue(this, Surge::Storage::InitialPatchName, "Init Saw");
+    initPatchCategory = Surge::Storage::getUserDefaultValue(
+        this, Surge::Storage::InitialPatchCategory, "Templates");
 }
 
 void SurgeStorage::initializePatchDb()
@@ -1214,6 +1244,8 @@ void SurgeStorage::clipboard_copy(int type, int scene, int entry)
                    sizeof(StepSequencerStorage));
         if (getPatch().scene[scene].lfo[entry].shape.val.i == lt_mseg)
             clipboard_msegs[0] = getPatch().msegs[scene][entry];
+        if (getPatch().scene[scene].lfo[entry].shape.val.i == lt_formula)
+            clipboard_formulae[0] = getPatch().formulamods[scene][entry];
         break;
     case cp_scene:
     {
@@ -1225,6 +1257,7 @@ void SurgeStorage::clipboard_copy(int type, int scene, int entry)
             memcpy(&clipboard_stepsequences[i], &getPatch().stepsequences[scene][i],
                    sizeof(StepSequencerStorage));
             clipboard_msegs[i] = getPatch().msegs[scene][i];
+            clipboard_formulae[i] = getPatch().formulamods[scene][i];
         }
         for (int i = 0; i < n_oscs; i++)
         {
@@ -1337,6 +1370,7 @@ void SurgeStorage::clipboard_paste(int type, int scene, int entry)
             memcpy(&getPatch().stepsequences[scene][i], &clipboard_stepsequences[i],
                    sizeof(StepSequencerStorage));
             getPatch().msegs[scene][i] = clipboard_msegs[i];
+            getPatch().formulamods[scene][i] = clipboard_formulae[i];
         }
 
         for (int i = 0; i < n_oscs; i++)
@@ -1413,6 +1447,8 @@ void SurgeStorage::clipboard_paste(int type, int scene, int entry)
                        sizeof(StepSequencerStorage));
             if (getPatch().scene[scene].lfo[entry].shape.val.i == lt_mseg)
                 getPatch().msegs[scene][entry] = clipboard_msegs[0];
+            if (getPatch().scene[scene].lfo[entry].shape.val.i == lt_formula)
+                getPatch().formulamods[scene][entry] = clipboard_formulae[0];
 
             break;
         case cp_scene:

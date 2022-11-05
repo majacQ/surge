@@ -27,7 +27,7 @@ namespace PatchStorage
 {
 struct PatchDB::workerS
 {
-    static constexpr const char *schema_version = "1"; // I will rebuild if this is not my verion
+    static constexpr const char *schema_version = "2"; // I will rebuild if this is not my verion
 
     /*
      * Obviously a lot of thought needs to go into this
@@ -74,6 +74,7 @@ CREATE TABLE PatchFeature (
         auto flag = SQLITE_OPEN_FULLMUTEX; // basically lock
         flag |= SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
 
+        std::cout << "\nPatchDB : Opening sqlitedb " << dbname << std::endl;
         auto ec = sqlite3_open_v2(dbname.c_str(), &dbh, flag, nullptr);
 
         if (ec != SQLITE_OK)
@@ -96,7 +97,7 @@ CREATE TABLE PatchFeature (
         // FIXME - error handling everywhere of course
         if (rc != SQLITE_OK)
         {
-            std::cout << "No VERSION table. Rebuilding" << std::endl;
+            std::cout << "        : No VERSION table. Rebuilding database" << std::endl;
             rebuild = true;
         }
         else
@@ -105,11 +106,11 @@ CREATE TABLE PatchFeature (
             {
                 int id = sqlite3_column_int(qs, 0);
                 auto ver = reinterpret_cast<const char *>(sqlite3_column_text(qs, 1));
-                std::cout << "id/ver='" << id << "' '" << ver << "' '" << schema_version << "'"
-                          << std::endl;
+                std::cout << "        : schema check. DBVersion='" << ver << "' SchemaVersion='"
+                          << schema_version << "'" << std::endl;
                 if (strcmp(ver, schema_version) == 0)
                 {
-                    std::cout << "That's a match. Lets not nuke" << std::endl;
+                    std::cout << "        : Schema matches. Reusing database." << std::endl;
                     rebuild = false;
                 }
             }
@@ -119,6 +120,9 @@ CREATE TABLE PatchFeature (
 
         if (rebuild)
         {
+            std::cout << "        : Schema missing or mismatched. Dropping and Rebuilding Database."
+                      << std::endl;
+
             auto res = sqlite3_exec(dbh, setup_sql, nullptr, nullptr, &emsg);
             if (res != SQLITE_OK)
             {
@@ -127,10 +131,8 @@ CREATE TABLE PatchFeature (
                 storage->reportError(oss.str(), "PatchDB Error");
                 sqlite3_free(emsg);
             }
-            std::cout << "SQLITE RES: " << res << " " << SQLITE_OK << std::endl;
             auto versql = std::string("INSERT INTO VERSION (\"schema_version\") VALUES (\"") +
                           schema_version + "\")";
-            std::cout << versql << std::endl;
             res = sqlite3_exec(dbh, versql.c_str(), nullptr, nullptr, &emsg);
             if (res != SQLITE_OK)
             {
@@ -166,14 +168,39 @@ CREATE TABLE PatchFeature (
         std::vector<feature> res;
         TiXmlDocument doc;
         doc.Parse(xml.c_str(), nullptr, TIXML_ENCODING_LEGACY);
+        if (doc.Error())
+        {
+            std::cout << "        - ERROR: Unable to load XML; Skipping file" << std::endl;
+            return res;
+        }
 
         auto patch = TINYXML_SAFE_TO_ELEMENT(doc.FirstChild("patch"));
+
+        if (!patch)
+        {
+            std::cout << "        - ERROR: No 'patch' element in XML" << std::endl;
+            return res;
+        }
+
         int rev = 0;
-        patch->QueryIntAttribute("revision", &rev);
-        res.emplace_back("REVISION", INT, rev, "");
+        if (patch->QueryIntAttribute("revision", &rev) == TIXML_SUCCESS)
+        {
+            res.emplace_back("REVISION", INT, rev, "");
+        }
+        else
+        {
+            std::cout << "        - ERROR: No Revision in XML" << std::endl;
+            return res;
+        }
 
         auto meta = TINYXML_SAFE_TO_ELEMENT(patch->FirstChild("meta"));
-        res.emplace_back("AUTHOR", STRING, 0, meta->Attribute("author"));
+        if (meta)
+        {
+            if (meta->Attribute("author"))
+            {
+                res.emplace_back("AUTHOR", STRING, 0, meta->Attribute("author"));
+            }
+        }
         return res;
     }
 
@@ -216,6 +243,12 @@ CREATE TABLE PatchFeature (
 
     void parseFXPIntoDB(const std::tuple<fs::path, std::string, std::string> &p)
     {
+        if (!fs::exists(std::get<0>(p)))
+        {
+            std::cout << "    - Warning: Non existent " << path_to_string(std::get<0>(p))
+                      << std::endl;
+            return;
+        }
         // Check with
         auto qtime = fs::last_write_time(std::get<0>(p));
         int64_t qtimeInt =
@@ -302,6 +335,8 @@ CREATE TABLE PatchFeature (
         if (patchLoaded)
             return;
 
+        std::cout << "        - Loading '" << path_to_string(std::get<0>(p)) << "'" << std::endl;
+
         // Oh so much to fix here, but lets start with error handling
         if (insertStmt == nullptr)
         {
@@ -385,6 +420,12 @@ CREATE TABLE PatchFeature (
 
         uint8_t *d = contents.data();
         auto *fxp = (fxChunkSetCustom *)d;
+        if ((vt_read_int32BE(fxp->chunkMagic) != 'CcnK') ||
+            (vt_read_int32BE(fxp->fxMagic) != 'FPCh') || (vt_read_int32BE(fxp->fxID) != 'cjs3'))
+        {
+            std::cout << "Not a surge patch; bailing" << std::endl;
+            return;
+        }
         // FIXME - checks for CcnK and stuff
 
         auto phd = d + sizeof(fxChunkSetCustom);

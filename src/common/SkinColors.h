@@ -24,7 +24,7 @@ struct Color
     static std::vector<Color> getAllColors();
 
     std::string name;
-    int r, g, b, a;
+    uint8_t r, g, b, a;
 };
 } // namespace Skin
 } // namespace Surge
@@ -105,6 +105,17 @@ extern const Surge::Skin::Color Background, Border, Text, BackgroundHover, Borde
 }
 } // namespace Grid
 } // namespace Effect
+
+namespace FormulaEditor
+{
+extern const Surge::Skin::Color Background, Highlight, Text, LineNumBackground, LineNumText;
+
+namespace Lua
+{
+extern const Surge::Skin::Color Bracket, Comment, Error, Identifier, Interpunction, Number, Keyword,
+    String;
+} // namespace Lua
+} // namespace FormulaEditor
 
 namespace InfoWindow
 {

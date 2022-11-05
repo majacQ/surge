@@ -17,9 +17,9 @@
 #include "SurgeStorage.h"
 #include "Oscillator.h"
 #include "SurgeVoiceState.h"
-#include "AdsrEnvelope.h"
-#include "LfoModulationSource.h"
-#include <vt_dsp/lipol.h>
+#include "ADSRModulationSource.h"
+#include "LFOModulationSource.h"
+#include <vembertech/lipol.h>
 #include "FilterCoefficientMaker.h"
 #include "QuadFilterChain.h"
 #include <array>
@@ -140,7 +140,7 @@ class alignas(16) SurgeVoice
                   bool noise);
     int routefilter(int);
 
-    LfoModulationSource lfo[6];
+    LFOModulationSource lfo[6];
 
     // Filterblock state storage
     void SetQFB(QuadFilterChainState *, int); // Set the parameters & registers
@@ -185,8 +185,8 @@ class alignas(16) SurgeVoice
     ControllerModulationSource monoAftertouchSource;
     ControllerModulationSource timbreSource;
     ModulationSource rndUni, rndBi, altUni, altBi;
-    AdsrEnvelope ampEGSource;
-    AdsrEnvelope filterEGSource;
+    ADSRModulationSource ampEGSource;
+    ADSRModulationSource filterEGSource;
 
     // filterblock stuff
     int id_cfa, id_cfb, id_kta, id_ktb, id_emoda, id_emodb, id_resoa, id_resob, id_drive, id_vca,

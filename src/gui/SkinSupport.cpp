@@ -18,14 +18,14 @@
 
 namespace Surge
 {
-namespace UI
+namespace GUI
 {
 
 const std::string NoneClassName = "none";
 const std::string Skin::defaultImageIDPrefix = "DEFAULT/";
 std::ostringstream SkinDB::errorStream;
 
-SkinDB &Surge::UI::SkinDB::get()
+SkinDB &Surge::GUI::SkinDB::get()
 {
     static SkinDB instance;
     return instance;
@@ -331,7 +331,8 @@ bool Skin::reloadSkin(std::shared_ptr<SurgeBitmaps> bitmapStore)
     auto fontPath = string_to_path(resourceName("fonts"));
     if (fs::is_directory(fontPath))
     {
-        addFontSearchPathToSystem(fontPath);
+        typeFaces.clear();
+        loadTypefacesFromPath(fontPath, typeFaces);
     }
 
     /*
@@ -573,7 +574,7 @@ bool Skin::reloadSkin(std::shared_ptr<SurgeBitmaps> bitmapStore)
             auto p = g.second.props;
             auto id = p["id"];
             auto val = p["value"];
-            auto r = VSTGUI::CColor();
+            auto r = juce::Colour();
             if (val[0] == '#')
             {
                 colors[id] = ColorStore(colorFromHexString(val));
@@ -623,7 +624,7 @@ bool Skin::reloadSkin(std::shared_ptr<SurgeBitmaps> bitmapStore)
             else
             {
                 c.second.type = ColorStore::COLOR;
-                c.second.color = VSTGUI::kRedCColor;
+                c.second.color = juce::Colours::red;
             }
         }
     }
@@ -721,7 +722,7 @@ bool Skin::setAllCapsProperty(std::string propertyValue)
     }
 }
 
-int Skin::setFontStyleProperty(std::string propertyValue)
+juce::Font::FontStyleFlags Skin::setFontStyleProperty(std::string propertyValue)
 {
     // make the property value not case sensitive
     std::transform(propertyValue.begin(), propertyValue.end(), propertyValue.begin(),
@@ -762,6 +763,26 @@ VSTGUI::CHoriTxtAlign Skin::setTextAlignProperty(std::string propertyValue)
     else
     {
         return VSTGUI::kLeftText;
+    }
+}
+
+juce::Justification Skin::setJuceTextAlignProperty(std::string propertyValue)
+{
+    // make the property value not case sensitive
+    std::transform(propertyValue.begin(), propertyValue.end(), propertyValue.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    if (propertyValue == "center")
+    {
+        return juce::Justification::centred;
+    }
+    else if (propertyValue == "right")
+    {
+        return juce::Justification::centredRight;
+    }
+    else
+    {
+        return juce::Justification::centredLeft;
     }
 }
 
@@ -961,28 +982,28 @@ bool Skin::recursiveGroupParse(ControlGroup::ptr_t parent, TiXmlElement *control
     return true;
 }
 
-VSTGUI::CColor Skin::colorFromHexString(const std::string &val) const
+juce::Colour Skin::colorFromHexString(const std::string &val) const
 {
     uint32_t rgb;
     sscanf(val.c_str() + 1, "%x", &rgb);
 
     auto l = strlen(val.c_str() + 1);
-    int a = 255;
+    uint8_t a = 255;
     if (l > 6)
     {
         a = rgb % 256;
         rgb = rgb >> 8;
     }
 
-    int b = rgb % 256;
+    uint8_t b = rgb % 256;
     rgb = rgb >> 8;
 
-    int g = rgb % 256;
+    uint8_t g = rgb % 256;
     rgb = rgb >> 8;
 
-    int r = rgb % 256;
+    uint8_t r = rgb % 256;
 
-    return VSTGUI::CColor(r, g, b, a);
+    return juce::Colour(r, g, b, a);
 }
 
 bool Skin::hasColor(const std::string &iid) const
@@ -994,8 +1015,8 @@ bool Skin::hasColor(const std::string &iid) const
     return colors.find(id) != colors.end();
 }
 
-VSTGUI::CColor Skin::getColor(const std::string &iid, const VSTGUI::CColor &def,
-                              std::unordered_set<std::string> noLoops) const
+juce::Colour Skin::getColor(const std::string &iid, const juce::Colour &def,
+                            std::unordered_set<std::string> noLoops) const
 {
     auto id = iid;
     if (id[0] == '$')
@@ -1025,7 +1046,7 @@ VSTGUI::CColor Skin::getColor(const std::string &iid, const VSTGUI::CColor &def,
         case ColorStore::ALIAS:
             return getColor(c.alias, def, noLoops);
         case ColorStore::UNRESOLVED_ALIAS: // This should never occur
-            return VSTGUI::kRedCColor;
+            return juce::Colours::red;
         }
     }
 
@@ -1123,7 +1144,24 @@ Skin::hoverBitmapOverlayForBackgroundBitmap(Skin::Control::ptr_t c, CScalableBit
     return nullptr;
 }
 
-void Surge::UI::Skin::Control::copyFromConnector(const Surge::Skin::Connector &c, int version)
+std::string Surge::GUI::Skin::hoverImageIdForResource(const int resource, HoverType t)
+{
+    std::ostringstream sid;
+    switch (t)
+    {
+    case HOVER:
+        sid << defaultImageIDPrefix << "hover" << std::setw(5) << std::setfill('0') << resource
+            << ".svg";
+        break;
+    case HOVER_OVER_ON:
+        sid << defaultImageIDPrefix << "hoverOn" << std::setw(5) << std::setfill('0') << resource
+            << ".svg";
+        break;
+    }
+    return sid.str();
+}
+
+void Surge::GUI::Skin::Control::copyFromConnector(const Surge::Skin::Connector &c, int version)
 {
     x = c.payload->posx;
     y = c.payload->posy;
@@ -1241,7 +1279,7 @@ void Surge::UI::Skin::Control::copyFromConnector(const Surge::Skin::Connector &c
     }
 }
 
-void Surge::UI::Skin::resolveBaseParentOffsets(Skin::Control::ptr_t c)
+void Surge::GUI::Skin::resolveBaseParentOffsets(Skin::Control::ptr_t c)
 {
     if (c->parentResolved)
         return;
@@ -1279,5 +1317,43 @@ void Surge::UI::Skin::resolveBaseParentOffsets(Skin::Control::ptr_t c)
     c->parentResolved = true;
 }
 
-} // namespace UI
+Skin::Control::Control()
+{
+    // I assume this is only called from UI thread so is single threaded, thus
+    static sessionid_t sidc = 1;
+    sessionid = sidc++;
+}
+
+std::array<juce::Drawable *, 3>
+Skin::standardHoverAndHoverOnForControl(Skin::Control::ptr_t c, std::shared_ptr<SurgeBitmaps> b)
+{
+    auto csb = backgroundBitmapForControl(c, b);
+    return standardHoverAndHoverOnForCSB(csb, c, b);
+}
+std::array<juce::Drawable *, 3> Skin::standardHoverAndHoverOnForIDB(int id,
+                                                                    std::shared_ptr<SurgeBitmaps> b)
+{
+    auto csb = b->getBitmap(id);
+    return standardHoverAndHoverOnForCSB(csb, nullptr, b);
+}
+std::array<juce::Drawable *, 3> Skin::standardHoverAndHoverOnForCSB(CScalableBitmap *csb,
+                                                                    Skin::Control::ptr_t c,
+                                                                    std::shared_ptr<SurgeBitmaps> b)
+{
+    std::array<juce::Drawable *, 3> res;
+    res[0] = csb->drawable.get();
+
+    auto hoverBmp =
+        hoverBitmapOverlayForBackgroundBitmap(c, csb, b, Surge::GUI::Skin::HoverType::HOVER);
+
+    res[1] = hoverBmp ? hoverBmp->drawable.get() : nullptr;
+
+    auto hoverOnBmp = hoverBitmapOverlayForBackgroundBitmap(
+        c, csb, b, Surge::GUI::Skin::HoverType::HOVER_OVER_ON);
+
+    res[2] = hoverOnBmp ? hoverOnBmp->drawable.get() : nullptr;
+    return res;
+}
+
+} // namespace GUI
 } // namespace Surge

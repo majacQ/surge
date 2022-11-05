@@ -70,6 +70,7 @@ Component Slider =
                       {"Hovered slider handle image when parameter is tempo-synced - required if "
                        "you want feedback on mouse hover"})
         .withProperty(Component::FONT_SIZE, {"font_size"}, {"Font size in points, integer only"})
+        .withProperty(Component::FONT_FAMILY, {"font_family"}, {"Font family ttf from skin"})
         .withProperty(Component::FONT_STYLE, {"font_style"},
                       {"Valid values: normal, bold, italic, underline, strikethrough"})
         .withProperty(Component::TEXT_ALIGN, {"text_align"}, {"Valid values: left, center, right"})
@@ -186,11 +187,12 @@ Connector fx2_return = Connector("global.fx2_return", 759, 162);
 
 namespace Scene
 {
-Connector polylimit = Connector("scene.polylimit", 100, 41, 43, 14, Components::NumberField)
-                          .withBackground(IDB_NUMFIELD_POLY_SPLIT)
-                          .withProperty(Component::NUMBERFIELD_CONTROLMODE, cm_polyphony)
-                          .withProperty(Component::TEXT_COLOR, "scene.split_poly.text")
-                          .withProperty(Component::TEXT_HOVER_COLOR, "scene.split_poly.text.hover");
+Connector polylimit =
+    Connector("scene.polylimit", 100, 41, 43, 14, Components::NumberField)
+        .withBackground(IDB_NUMFIELD_POLY_SPLIT)
+        .withProperty(Component::NUMBERFIELD_CONTROLMODE, Surge::Skin::Parameters::POLY_COUNT)
+        .withProperty(Component::TEXT_COLOR, "scene.split_poly.text")
+        .withProperty(Component::TEXT_HOVER_COLOR, "scene.split_poly.text.hover");
 Connector splitpoint =
     Connector("scene.splitpoint", 100, 11, 43, 14, Components::NumberField)
         .withBackground(IDB_NUMFIELD_POLY_SPLIT)
@@ -198,16 +200,18 @@ Connector splitpoint =
         .withProperty(Component::TEXT_HOVER_COLOR, "scene.split_poly.text.hover");
 // this doesn't have a cm since it is special
 
-Connector pbrange_dn = Connector("scene.pbrange_dn", 159, 110, 30, 13, Components::NumberField)
-                           .withProperty(Component::NUMBERFIELD_CONTROLMODE, cm_pbdepth)
-                           .withBackground(IDB_NUMFIELD_PITCHBEND)
-                           .withProperty(Component::TEXT_COLOR, "scene.pbrange.text")
-                           .withProperty(Component::TEXT_HOVER_COLOR, "scene.pbrange.text.hover");
-Connector pbrange_up = Connector("scene.pbrange_up", 187, 110, 30, 13, Components::NumberField)
-                           .withProperty(Component::NUMBERFIELD_CONTROLMODE, cm_pbdepth)
-                           .withBackground(IDB_NUMFIELD_PITCHBEND)
-                           .withProperty(Component::TEXT_COLOR, "scene.pbrange.text")
-                           .withProperty(Component::TEXT_HOVER_COLOR, "scene.pbrange.text.hover");
+Connector pbrange_dn =
+    Connector("scene.pbrange_dn", 159, 110, 30, 13, Components::NumberField)
+        .withProperty(Component::NUMBERFIELD_CONTROLMODE, Surge::Skin::Parameters::PB_DEPTH)
+        .withBackground(IDB_NUMFIELD_PITCHBEND)
+        .withProperty(Component::TEXT_COLOR, "scene.pbrange.text")
+        .withProperty(Component::TEXT_HOVER_COLOR, "scene.pbrange.text.hover");
+Connector pbrange_up =
+    Connector("scene.pbrange_up", 187, 110, 30, 13, Components::NumberField)
+        .withProperty(Component::NUMBERFIELD_CONTROLMODE, Surge::Skin::Parameters::PB_DEPTH)
+        .withBackground(IDB_NUMFIELD_PITCHBEND)
+        .withProperty(Component::TEXT_COLOR, "scene.pbrange.text")
+        .withProperty(Component::TEXT_HOVER_COLOR, "scene.pbrange.text.hover");
 Connector playmode = Connector("scene.playmode", 239, 87, 50, 47, Components::HSwitch2)
                          .withHSwitch2Properties(IDB_PLAY_MODE, 6, 6, 1);
 Connector drift = Connector("scene.drift", 156, 141).asHorizontal().asWhite();
@@ -225,7 +229,7 @@ Connector portatime = Connector("scene.portamento", 156, 234).asHorizontal();
 Connector keytrack_root =
     Connector("scene.keytrack_root", 311, 266, 43, 14, Components::NumberField)
         .withBackground(IDB_NUMFIELD_KEYTRACK_ROOT)
-        .withProperty(Component::NUMBERFIELD_CONTROLMODE, cm_notename)
+        .withProperty(Component::NUMBERFIELD_CONTROLMODE, Surge::Skin::Parameters::NOTENAME)
         .withProperty(Component::TEXT_COLOR, "scene.keytrackroot.text")
         .withProperty(Component::TEXT_HOVER_COLOR, "scene.keytrackroot.text.hover");
 
@@ -323,7 +327,7 @@ Connector level_noise =
     Connector("mixer.level_noise", 100, 38).asVertical().asWhite().inParent("mixer.panel");
 
 Connector level_prefiltergain =
-    Connector("mixer.level_prefiltergain", 120, 37).asVertical().asWhite().inParent("mixer.panel");
+    Connector("mixer.level_prefiltergain", 120, 38).asVertical().asWhite().inParent("mixer.panel");
 } // namespace Mixer
 
 namespace Filter
@@ -454,7 +458,7 @@ namespace LFO
 {
 // For now these two have component 'CUSTOM' and we hadn't pick a component in the code
 Connector lfo_title_label =
-    Connector("lfo.title", 6, 489, 11, 83, Components::Custom, Connector::LFO_LABEL);
+    Connector("lfo.title", 6, 493, 11, 75, Components::Custom, Connector::LFO_LABEL);
 Connector lfo_presets =
     Connector("lfo.presets", 6, 484, 13, 11, Components::Switch, Connector::LFO_MENU)
         .withBackground(IDB_LFO_PRESET_MENU);

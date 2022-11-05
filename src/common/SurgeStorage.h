@@ -366,14 +366,14 @@ enum lfo_type
     lt_envelope,
     lt_stepseq,
     lt_mseg,
-    lt_function,
+    lt_formula,
 
     n_lfo_types,
 };
 
 const char lt_names[n_lfo_types][32] = {
     "Sine",          "Triangle", "Square",         "Sawtooth", "Noise",
-    "Sample & Hold", "Envelope", "Step Sequencer", "MSEG",     "Function (work in progress!)",
+    "Sample & Hold", "Envelope", "Step Sequencer", "MSEG",     "Formula",
 };
 
 const int lt_num_deforms[n_lfo_types] = {
@@ -386,7 +386,7 @@ const int lt_num_deforms[n_lfo_types] = {
     3, // lt_envelope
     0, // lt_stepseq
     0, // lt_mseg
-    3, // lt_function
+    3, // lt_formula
 };
 
 /*
@@ -487,6 +487,10 @@ struct OscillatorStorage : public CountedSetUserData // The counted set is the w
     Wavetable wt;
 #define WAVETABLE_DISPLAY_NAME_SIZE 256
     char wavetable_display_name[WAVETABLE_DISPLAY_NAME_SIZE];
+    std::string wavetable_formula = "";
+    int wavetable_formula_res_base = 5, // 32 * 2^this
+        wavetable_formula_nframes = 10;
+
     void *queue_xmldata;
     int queue_type;
 
@@ -600,8 +604,10 @@ struct MSEGStorage
                       // MSEGModulationHelper::rebuildCache will set it
         float dragv1; // Only used in the endpoint
         float cpduration, cpv, dragcpv, dragcpratio = 0.5;
-        bool useDeform = true;
-        bool invertDeform = false;
+
+        bool useDeform = true, invertDeform = false;
+        bool retriggerFEG = false, retriggerAEG = false;
+
         enum Type
         {
             LINEAR = 1,
@@ -674,8 +680,26 @@ struct MSEGStorage
     static constexpr float minimumDuration = 0.0;
 };
 
+#if HAS_LUAJIT
+#define HAS_FORMULA_MODULATOR 1
+#endif
+
 struct FormulaModulatorStorage
-{ // Currently an unused placeholder
+{
+    std::string formulaString = "";
+    size_t formulaHash = 0;
+
+    // these values stream so don't change the numerical equivalents
+    enum Interpreter
+    {
+        LUA = 1001
+    } interpreter = LUA;
+
+    void setFormula(const std::string &s)
+    {
+        formulaString = s;
+        formulaHash = std::hash<std::string>{}(s);
+    }
 };
 
 /*
@@ -771,6 +795,8 @@ class SurgePatch
     void msegFromXMLElement(MSEGStorage *ms, TiXmlElement *parent, bool restoreSnaps) const;
     void stepSeqToXmlElement(StepSequencerStorage *ss, TiXmlElement &parent, bool streamMask) const;
     void stepSeqFromXmlElement(StepSequencerStorage *ss, TiXmlElement *parent) const;
+    void formulaToXMLElement(FormulaModulatorStorage *ms, TiXmlElement &parent) const;
+    void formulaFromXMLElement(FormulaModulatorStorage *ms, TiXmlElement *parent) const;
 
     void load_patch(const void *data, int size, bool preset);
     unsigned int save_patch(void **data);
@@ -806,7 +832,7 @@ class SurgePatch
     // metadata
     std::string name, category, author, comment;
     // metaparameters
-#define CUSTOM_CONTROLLER_LABEL_SIZE 16
+#define CUSTOM_CONTROLLER_LABEL_SIZE 20
     char CustomControllerLabel[n_customcontrollers][CUSTOM_CONTROLLER_LABEL_SIZE];
 
     int streamingRevision;
@@ -909,6 +935,8 @@ class alignas(16) SurgeStorage
             return def;
         };
     }
+
+    std::string initPatchName{"Init Saw"}, initPatchCategory{"Templates"};
 
     static constexpr int tuning_table_size = 512;
     float table_pitch alignas(16)[tuning_table_size];
@@ -1217,6 +1245,7 @@ class alignas(16) SurgeStorage
     int clipboard_type;
     StepSequencerStorage clipboard_stepsequences[n_lfos];
     MSEGStorage clipboard_msegs[n_lfos];
+    FormulaModulatorStorage clipboard_formulae[n_lfos];
     OscillatorStorage::ExtraConfigurationData clipboard_extraconfig[n_oscs];
     std::vector<ModulationRouting> clipboard_modulation_scene, clipboard_modulation_voice;
     Wavetable clipboard_wt[n_oscs];

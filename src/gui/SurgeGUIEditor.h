@@ -19,6 +19,8 @@
 
 #include <JuceHeader.h>
 
+#include "SurgeGUICallbackInterfaces.h"
+
 #include "efvg/escape_from_vstgui.h"
 #include "SurgeStorage.h"
 #include "SurgeBitmaps.h"
@@ -28,33 +30,58 @@
 #include "SkinSupport.h"
 #include "SkinColors.h"
 
+#include "overlays/MSEGEditor.h"
+#include "overlays/OverlayWrapper.h" // This needs to be concrete for inline functions for now
+#include "widgets/ModulatableControlInterface.h"
+
 #include <vector>
-#include "MSEGEditor.h"
 #include <thread>
 #include <atomic>
 
-#include "SurgeSynthEditor.h"
-typedef EscapeFromVSTGUI::JuceVSTGUIEditorAdapter EditorType;
-#define PARENT_PLUGIN_TYPE SurgeSynthEditor
+class SurgeSynthEditor;
 
-class CSurgeSlider;
-class CModulationSourceButton;
-class CAboutBox;
-class CMidiLearnOverlay;
+namespace Surge
+{
+namespace Widgets
+{
+struct EffectChooser;
+struct EffectLabel;
+struct LFOAndStepDisplay;
+struct ModulationSourceButton;
+struct ModulatableControlInterface;
+struct NumberField;
+struct OscillatorWaveformDisplay;
+struct ParameterInfowindow;
+struct PatchSelector;
+struct Switch;
+struct VerticalLabel;
+struct VuMeter;
 
-struct SGEDropAdapter;
+struct MainFrame;
 
-class SurgeGUIEditor : public EditorType,
-                       public VSTGUI::IControlListener,
-                       public VSTGUI::IKeyboardHook,
+struct OscillatorMenu;
+struct FxMenu;
+} // namespace Widgets
+
+namespace Overlays
+{
+struct AboutScreen;
+struct TypeinParamEditor;
+struct MiniEdit;
+
+struct OverlayWrapper;
+struct PatchStoreDialog;
+} // namespace Overlays
+} // namespace Surge
+
+class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
                        public SurgeStorage::ErrorListener
 {
-  private:
-    using super = EditorType;
-
   public:
-    SurgeGUIEditor(PARENT_PLUGIN_TYPE *effect, SurgeSynthesizer *synth, void *userdata = nullptr);
+    SurgeGUIEditor(SurgeSynthEditor *juceEditor, SurgeSynthesizer *synth);
     virtual ~SurgeGUIEditor();
+
+    std::unique_ptr<Surge::Widgets::MainFrame> frame;
 
     std::atomic<int> errorItemCount{0};
     std::vector<std::pair<std::string, std::string>> errorItems;
@@ -67,14 +94,11 @@ class SurgeGUIEditor : public EditorType,
     bool queue_refresh;
     virtual void toggle_mod_editing();
 
-    virtual void beginEdit(long index);
-    virtual void endEdit(long index);
-
     static long applyParameterOffset(long index);
     static long unapplyParameterOffset(long index);
 
-    bool open(void *parent) override;
-    void close() override;
+    bool open(void *parent);
+    void close();
 
     bool pause_idle_updates = false;
     int enqueuePatchId = -1;
@@ -92,21 +116,24 @@ class SurgeGUIEditor : public EditorType,
     }
 
   protected:
+#if PORTED_TO_JUCE
     int32_t onKeyDown(const VstKeyCode &code,
                       VSTGUI::CFrame *frame) override; ///< should return 1 if no further key down
                                                        ///< processing should apply, otherwise -1
     int32_t onKeyUp(const VstKeyCode &code,
                     VSTGUI::CFrame *frame) override; ///< should return 1 if no further key up
                                                      ///< processing should apply, otherwise -1
+#endif
 
     virtual void setParameter(long index, float value);
 
     // listener class
-    void valueChanged(VSTGUI::CControl *control) override;
-    int32_t controlModifierClicked(VSTGUI::CControl *pControl,
-                                   VSTGUI::CButtonState button) override;
-    void controlBeginEdit(VSTGUI::CControl *pControl) override;
-    void controlEndEdit(VSTGUI::CControl *pControl) override;
+    void valueChanged(Surge::GUI::IComponentTagValue *control) override;
+    int32_t controlModifierClicked(Surge::GUI::IComponentTagValue *pControl,
+                                   const juce::ModifierKeys &button,
+                                   bool isDoubleClickEvent) override;
+    void controlBeginEdit(Surge::GUI::IComponentTagValue *pControl) override;
+    void controlEndEdit(Surge::GUI::IComponentTagValue *pControl) override;
 
   public:
     void refresh_mod();
@@ -114,7 +141,7 @@ class SurgeGUIEditor : public EditorType,
 
     void effectSettingsBackgroundClick(int whichScene);
 
-    void setDisabledForParameter(Parameter *p, CSurgeSlider *s);
+    void setDisabledForParameter(Parameter *p, Surge::Widgets::ModulatableControlInterface *s);
     void showSettingsMenu(VSTGUI::CRect &menuRect);
 
     static bool fromSynthGUITag(SurgeSynthesizer *synth, int tag, SurgeSynthesizer::ID &q);
@@ -135,7 +162,6 @@ class SurgeGUIEditor : public EditorType,
     int fxbypass_tag = 0, f1subtypetag = 0, f2subtypetag = 0, filterblock_tag = 0, fmconfig_tag = 0;
     double lastTempo = 0;
     int lastTSNum = 0, lastTSDen = 0;
-    void draw_infowindow(int ptag, VSTGUI::CControl *control, bool modulate, bool forceMB = false);
     void adjustSize(float &width, float &height) const;
 
     struct patchdata
@@ -251,8 +277,10 @@ class SurgeGUIEditor : public EditorType,
     void mappingFileDropped(std::string fn);
     std::string tuningToHtml();
 
+    void modSourceButtonDroppedAt(Surge::Widgets::ModulationSourceButton *msb,
+                                  const juce::Point<int> &);
     void swapControllers(int t1, int t2);
-    void openModTypeinOnDrop(int ms, VSTGUI::CControl *sl, int tgt);
+    void openModTypeinOnDrop(int ms, Surge::Widgets::ModulatableControlInterface *sl, int tgt);
 
     void queueRebuildUI()
     {
@@ -281,6 +309,7 @@ class SurgeGUIEditor : public EditorType,
     int getWindowSizeX() const { return wsx; }
     int getWindowSizeY() const { return wsy; }
 
+    void repaintFrame();
     /*
      * We have an enumerated set of overlay tags which we can push
      * to the UI. You *have* to give a new overlay type a tag in
@@ -292,29 +321,33 @@ class SurgeGUIEditor : public EditorType,
         MSEG_EDITOR,
         STORE_PATCH,
         PATCH_BROWSER,
-        MODULATION_EDITOR
+        MODULATION_EDITOR,
+        FORMULA_EDITOR,
+        WAVETABLESCRIPTING_EDITOR,
     };
 
-    void addEditorOverlay(
-        VSTGUI::CView *c,
+    // I will be handed a pointer I need to keep around you know.
+    void addJuceEditorOverlay(
+        std::unique_ptr<juce::Component> c,
         std::string editorTitle, // A window display title - whatever you want
         OverlayTags editorTag,   // A tag by editor class. Please unique, no spaces.
-        const VSTGUI::CPoint &topleft = VSTGUI::CPoint(0, 0), bool modalOverlay = true,
-        bool hasCloseButton = true, std::function<void()> onClose = []() {});
+        const juce::Rectangle<int> &containerBounds, bool showCloseButton = true,
+        std::function<void()> onClose = []() {});
+    std::unordered_map<OverlayTags, std::unique_ptr<Surge::Overlays::OverlayWrapper>> juceOverlays;
+
     void dismissEditorOfType(OverlayTags ofType);
     OverlayTags topmostEditorTag()
     {
-        if (!editorOverlay.size())
-            return NO_EDITOR;
-        return editorOverlay.back().first;
+        static bool warnTET = false;
+        jassert(warnTET);
+        warnTET = true;
+        return NO_EDITOR;
     }
     bool isAnyOverlayPresent(OverlayTags tag)
     {
-        for (auto el : editorOverlay)
-        {
-            if (el.first == tag)
-                return true;
-        }
+        if (juceOverlays.find(tag) != juceOverlays.end() && juceOverlays[tag])
+            return true;
+
         return false;
     }
 
@@ -335,6 +368,13 @@ class SurgeGUIEditor : public EditorType,
     void closeModulationEditorDialog();
     void showModulationEditorDialog();
 
+    void closeFormulaEditorDialog();
+    void showFormulaEditorDialog();
+    void toggleFormulaEditorDialog();
+
+    void closeWavetableScripter();
+    void showWavetableScripter();
+
     void lfoShapeChanged(int prior, int curr);
     void showMSEGEditor();
     void closeMSEGEditor();
@@ -343,17 +383,10 @@ class SurgeGUIEditor : public EditorType,
     int msegIsOpenFor = -1, msegIsOpenInScene = -1;
     bool showMSEGEditorOnNextIdleOrOpen = false;
 
-    MSEGEditor::State msegEditState[n_scenes][n_lfos];
-    MSEGEditor::State mostRecentCopiedMSEGState;
+    Surge::Overlays::MSEGEditor::State msegEditState[n_scenes][n_lfos];
+    Surge::Overlays::MSEGEditor::State mostRecentCopiedMSEGState;
 
     int oscilatorMenuIndex[n_scenes][n_oscs] = {0};
-
-    bool hasIdleRun = false;
-    VSTGUI::CPoint resizeToOnIdle = VSTGUI::CPoint(-1, -1);
-
-  private:
-    SGEDropAdapter *dropAdapter = nullptr;
-    friend class SGEDropAdapter;
 
   public:
     bool canDropTarget(const std::string &fname); // these come as const char* from vstgui
@@ -383,8 +416,8 @@ class SurgeGUIEditor : public EditorType,
                                       int percentageOfScreenAvailable, float baseW, float baseH);
 
   public:
-    void showAboutBox(int devModeGrid = -1);
-    void hideAboutBox();
+    void showAboutScreen(int devModeGrid = -1);
+    void hideAboutScreen();
 
     void showMidiLearnOverlay(const VSTGUI::CRect &r);
     void hideMidiLearnOverlay();
@@ -403,50 +436,49 @@ class SurgeGUIEditor : public EditorType,
   private:
     bool modsource_is_alternate[n_modsources];
 
+  private:
+    std::array<std::unique_ptr<Surge::Widgets::VuMeter>, 16> vu;
+    std::unique_ptr<Surge::Widgets::PatchSelector> patchSelector;
+    std::unique_ptr<Surge::Widgets::OscillatorMenu> oscMenu;
+    std::unique_ptr<Surge::Widgets::FxMenu> fxMenu;
+
+    /* Infowindow members and functions */
+    std::unique_ptr<Surge::Widgets::ParameterInfowindow> paramInfowindow;
+
   public:
-    void toggleAlternateFor(VSTGUI::CControl *c);
+    void showInfowindow(int ptag, juce::Rectangle<int> relativeTo, bool isModulated);
+    void showInfowindowSelfDismiss(int ptag, juce::Rectangle<int> relativeTo, bool isModulated);
+    void updateInfowindowContents(int ptag, bool isModulated);
+    void hideInfowindowNow();
+    void hideInfowindowSoon();
+    void idleInfowindow();
 
   private:
-    VSTGUI::CControl *vu[16];
-    VSTGUI::CControl *infowindow, *patchname, *ccfxconf = nullptr;
-    VSTGUI::CControl *statusMPE = nullptr, *statusTune = nullptr, *statusZoom = nullptr;
-    CAboutBox *aboutbox = nullptr;
-    CMidiLearnOverlay *midiLearnOverlay = nullptr;
-    VSTGUI::CTextEdit *patchName = nullptr;
-    VSTGUI::CTextEdit *patchCategory = nullptr;
-    VSTGUI::CTextEdit *patchCreator = nullptr;
-    VSTGUI::CTextEdit *patchComment = nullptr;
-    VSTGUI::CCheckBox *patchTuning = nullptr;
-    VSTGUI::CTextLabel *patchTuningLabel = nullptr;
+    std::unique_ptr<Surge::Widgets::EffectChooser> effectChooser;
+
+    Surge::GUI::IComponentTagValue *statusMPE = nullptr, *statusTune = nullptr,
+                                   *statusZoom = nullptr;
+    std::unique_ptr<Surge::Overlays::AboutScreen> aboutScreen;
+
+    std::unique_ptr<juce::Drawable> midiLearnOverlay;
+
 #if BUILD_IS_DEBUG
-    VSTGUI::CTextLabel *debugLabel = nullptr;
+    std::unique_ptr<juce::Label> debugLabel;
 #endif
 
-    VSTGUI::CViewContainer *typeinDialog = nullptr;
-    VSTGUI::CTextEdit *typeinValue = nullptr;
-    VSTGUI::CTextLabel *typeinLabel = nullptr;
-    VSTGUI::CTextLabel *typeinPriorValueLabel = nullptr;
-    VSTGUI::CControl *typeinEditControl = nullptr;
-    VSTGUI::CControl *msegEditSwitch = nullptr;
-    enum TypeInMode
-    {
-        Inactive,
-        Param,
-        Control
-    } typeinMode = Inactive;
-    std::vector<VSTGUI::CView *> removeFromFrame;
+    std::unique_ptr<Surge::Overlays::TypeinParamEditor> typeinParamEditor;
+    bool setParameterFromString(Parameter *p, const std::string &s);
+    bool setParameterModulationFromString(Parameter *p, modsources ms, const std::string &s);
+    bool setControlFromString(modsources ms, const std::string &s);
+    friend struct Surge::Overlays::TypeinParamEditor;
+    friend struct Surge::Overlays::PatchStoreDialog;
+    friend struct Surge::Widgets::MainFrame;
+
+    Surge::GUI::IComponentTagValue *msegEditSwitch = nullptr;
     int typeinResetCounter = -1;
     std::string typeinResetLabel = "";
 
-    // Data structures for a list of overlays and associated data witht hem
-    std::vector<std::pair<OverlayTags, VSTGUI::CViewContainer *>> editorOverlay;
-    std::unordered_map<VSTGUI::CViewContainer *, VSTGUI::CView *>
-        editorOverlayContentsWeakReference;
-    std::unordered_map<VSTGUI::CViewContainer *, std::function<void()>> editorOverlayOnClose;
-
-    VSTGUI::CViewContainer *minieditOverlay = nullptr;
-    VSTGUI::CTextEdit *minieditTypein = nullptr;
-    std::function<void(const char *)> minieditOverlayDone = [](const char *) {};
+    std::unique_ptr<Surge::Overlays::MiniEdit> miniEdit;
 
   public:
     std::string editorOverlayTagAtClose; // FIXME what is this?
@@ -454,9 +486,45 @@ class SurgeGUIEditor : public EditorType,
                            const std::string &title, const VSTGUI::CPoint &where,
                            std::function<void(const std::string &)> onOK);
 
+    /*
+     * This is the JUCE component management
+     */
+    std::array<std::unique_ptr<Surge::Widgets::EffectLabel>, 15> effectLabels;
+
+    std::unordered_map<Surge::GUI::Skin::Control::sessionid_t, std::unique_ptr<juce::Component>>
+        juceSkinComponents;
+    template <typename T>
+    std::unique_ptr<T> componentForSkinSession(const Surge::GUI::Skin::Control::sessionid_t id)
+    {
+        std::unique_ptr<T> hsw;
+        if (juceSkinComponents.find(id) != juceSkinComponents.end())
+        {
+            // this has the wrong type for a std::move so do this instead - sigh
+            auto pq = dynamic_cast<T *>(juceSkinComponents[id].get());
+            if (pq)
+            {
+                juceSkinComponents[id].release();
+                juceSkinComponents.erase(id);
+                hsw = std::unique_ptr<T>{pq};
+            }
+            else
+            {
+                // This happens if a control switches types - like, say,
+                // a slider goes to a menu so delete the old one
+                juceSkinComponents.erase(id);
+                hsw = std::make_unique<T>();
+            }
+        }
+        else
+        {
+            hsw = std::make_unique<T>();
+        }
+        return std::move(hsw);
+    }
+
   private:
-    VSTGUI::CTextLabel *lfoNameLabel = nullptr;
-    VSTGUI::CTextLabel *fxPresetLabel = nullptr;
+    std::unique_ptr<Surge::Widgets::VerticalLabel> lfoNameLabel;
+    std::unique_ptr<juce::Label> fxPresetLabel;
 
   public:
     std::string modulatorName(int ms, bool forButton);
@@ -465,51 +533,51 @@ class SurgeGUIEditor : public EditorType,
     Parameter *typeinEditTarget = nullptr;
     int typeinModSource = -1;
 
-    VSTGUI::CControl *polydisp = nullptr;
-    VSTGUI::CControl *oscdisplay = nullptr;
-    VSTGUI::CControl *splitpointControl = nullptr;
+    std::unique_ptr<Surge::Widgets::OscillatorWaveformDisplay> oscWaveform;
+    std::unique_ptr<Surge::Widgets::NumberField> polydisp;
+    std::unique_ptr<Surge::Widgets::NumberField> splitpointControl;
 
     static const int n_paramslots = 1024;
-    VSTGUI::CControl *param[n_paramslots] = {};
-    VSTGUI::CControl *nonmod_param[n_paramslots] = {};
-    CModulationSourceButton *gui_modsrc[n_modsources] = {};
-    VSTGUI::CControl *metaparam[n_customcontrollers] = {};
-    VSTGUI::CControl *lfodisplay = nullptr;
-    VSTGUI::CControl *filtersubtype[2] = {};
-    VSTGUI::CControl *fxmenu = nullptr;
-    int clear_infoview_countdown = 0;
+    Surge::Widgets::ModulatableControlInterface *param[n_paramslots] = {};
+    Surge::GUI::IComponentTagValue *nonmod_param[n_paramslots] = {};
+    std::array<std::unique_ptr<Surge::Widgets::ModulationSourceButton>, n_modsources> gui_modsrc;
+    std::unique_ptr<Surge::Widgets::LFOAndStepDisplay> lfoDisplay;
+
+    // VSTGUI::CControl *lfodisplay = nullptr;
+    Surge::Widgets::Switch *filtersubtype[2] = {};
 
   public:
-    int clear_infoview_peridle = -1;
     bool useDevMenu = false;
 
   private:
     float blinktimer = 0;
     bool blinkstate = false;
-    PARENT_PLUGIN_TYPE *_effect = nullptr;
-    void *_userdata = nullptr;
+    SurgeSynthEditor *juceEditor{nullptr};
     int firstIdleCountdown = 0;
 
-    /*
-    ** Utility Function
-    */
-    std::shared_ptr<VSTGUI::CCommandMenuItem>
-    addCallbackMenu(VSTGUI::COptionMenu *toThis, std::string label, std::function<void()> op);
-
-    VSTGUI::COptionMenu *
+    juce::PopupMenu
     makeSmoothMenu(VSTGUI::CRect &menuRect, const Surge::Storage::DefaultKey &key, int defaultValue,
                    std::function<void(ControllerModulationSource::SmoothingMode)> setSmooth);
 
-    VSTGUI::COptionMenu *makeMpeMenu(VSTGUI::CRect &rect, bool showhelp);
-    VSTGUI::COptionMenu *makeTuningMenu(VSTGUI::CRect &rect, bool showhelp);
-    VSTGUI::COptionMenu *makeZoomMenu(VSTGUI::CRect &rect, bool showhelp);
-    VSTGUI::COptionMenu *makeSkinMenu(VSTGUI::CRect &rect);
-    VSTGUI::COptionMenu *makeUserSettingsMenu(VSTGUI::CRect &rect);
-    VSTGUI::COptionMenu *makeDataMenu(VSTGUI::CRect &rect);
-    VSTGUI::COptionMenu *makeMidiMenu(VSTGUI::CRect &rect);
-    VSTGUI::COptionMenu *makeDevMenu(VSTGUI::CRect &rect);
-    VSTGUI::COptionMenu *makeLfoMenu(VSTGUI::CRect &rect);
-    VSTGUI::COptionMenu *makeMonoModeOptionsMenu(VSTGUI::CRect &rect, bool updateDefaults);
+    juce::PopupMenu makeMpeMenu(VSTGUI::CRect &rect, bool showhelp);
+    juce::PopupMenu makeTuningMenu(VSTGUI::CRect &rect, bool showhelp);
+    juce::PopupMenu makeZoomMenu(VSTGUI::CRect &rect, bool showhelp);
+    juce::PopupMenu makeSkinMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makeMouseBehaviorMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makePatchDefaultsMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makeValueDisplaysMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makeWorkflowMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makeDataMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makeMidiMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makeDevMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makeLfoMenu(VSTGUI::CRect &rect);
+    juce::PopupMenu makeMonoModeOptionsMenu(VSTGUI::CRect &rect, bool updateDefaults);
+
+  public:
+    bool getShowVirtualKeyboard();
+    void setShowVirtualKeyboard(bool b);
+
+  private:
     bool scannedForMidiPresets = false;
 
     void resetSmoothing(ControllerModulationSource::SmoothingMode t);
@@ -523,17 +591,17 @@ class SurgeGUIEditor : public EditorType,
     static std::string fullyResolvedHelpURL(std::string helpurl);
 
   private:
-    void promptForUserValueEntry(Parameter *p, VSTGUI::CControl *c, int modulationSource = -1);
+    void promptForUserValueEntry(Parameter *p, juce::Component *c, int modulationSource = -1);
 
     /*
     ** Skin support
     */
-    Surge::UI::Skin::ptr_t currentSkin;
-    void setupSkinFromEntry(const Surge::UI::SkinDB::Entry &entry);
+    Surge::GUI::Skin::ptr_t currentSkin;
+    void setupSkinFromEntry(const Surge::GUI::SkinDB::Entry &entry);
     void reloadFromSkin();
-    VSTGUI::CControl *layoutComponentForSkin(std::shared_ptr<Surge::UI::Skin::Control> skinCtrl,
-                                             long tag, int paramIndex = -1, Parameter *p = nullptr,
-                                             int style = 0);
+    Surge::GUI::IComponentTagValue *
+    layoutComponentForSkin(std::shared_ptr<Surge::GUI::Skin::Control> skinCtrl, long tag,
+                           int paramIndex = -1, Parameter *p = nullptr, int style = 0);
 
     /*
     ** General MIDI CC names

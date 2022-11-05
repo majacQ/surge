@@ -60,8 +60,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 #endif
     int main() {}" COMPILER_HAS_AVX_OR_IS_ARM)
   if (NOT COMPILER_HAS_AVX_OR_IS_ARM)
-    message(STATUS "Adding -mavx to allow __AVX__ compiles" )
-    add_compile_options("-mavx")
+    message(STATUS "Holding off on AVX support. See #4479 for the strategy" )
+    # add_compile_options("-mavx")
   endif()
 
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -86,6 +86,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     add_compile_options(
         -Wformat-truncation=0 # squelch warning about snprintf truncating strings (see PR #3977)
         -Wno-free-nonheap-object # https://github.com/surge-synthesizer/surge/issues/4251
+        -Wno-return-local-addr # squelch sqlite3 error: function may return address of local variable
     )
     add_link_options("-Wl,-z,noexecstack" )
   endif()
@@ -112,7 +113,7 @@ if(MSVC)
     /Zc:alignedNew
     /bigobj
 
-    /arch:AVX
+    # /arch:AVX
 
     # Build with Multiple Processes (Clang-cl builds use Ninja instead)
     $<$<CXX_COMPILER_ID:MSVC>:/MP>
@@ -135,10 +136,12 @@ endif()
 
 if( SURGE_ALTERNATE_JUCE )
   message( STATUS "Using *Alternate* JUCE from ${SURGE_ALTERNATE_JUCE}" )
-  add_subdirectory( ${SURGE_ALTERNATE_JUCE} ${CMAKE_BINARY_DIR}/alternate-juce )
+  add_subdirectory( ${SURGE_ALTERNATE_JUCE} ${CMAKE_BINARY_DIR}/alternate-juce  EXCLUDE_FROM_ALL)
+  set( SURGE_JUCE_LOCATION ${SURGE_ALTERNATE_JUCE} )
 else()
   message( STATUS "Using JUCE from submodule libs/JUCE" )
-  add_subdirectory( libs/JUCE )
+  add_subdirectory( libs/JUCE EXCLUDE_FROM_ALL )
+  set( SURGE_JUCE_LOCATION ${CMAKE_SOURCE_DIR}/libs/JUCE )
 endif()
 
 include(cmake/stage-extra-content.cmake)
@@ -154,6 +157,7 @@ add_subdirectory(libs/tinyxml)
 add_subdirectory(libs/escape-from-vstgui)
 add_subdirectory(libs/oddsound-mts)
 add_subdirectory(libs/libsamplerate EXCLUDE_FROM_ALL)
+add_subdirectory(libs/tuning-library EXCLUDE_FROM_ALL)
 add_subdirectory(libs/sqlite-3.23.3)
 
 juce_add_binary_data(surge-shared-binary
@@ -176,7 +180,13 @@ target_link_libraries(surge-shared PUBLIC
   surge::oddsound-mts
   samplerate
   surge-shared-binary
+  tuning-library
 )
+
+if( NOT LINUX_ARM_CROSSCOMPILE )
+  add_subdirectory(libs/LuaJitLib)
+  target_link_libraries(surge-shared PUBLIC luajit-5.1)
+endif()
 
 # We want to run this once alas, since JUCE needs it even though it is a byproduct of a phase to build the
 # JUCE Cmake file list.
@@ -220,96 +230,102 @@ set( BUILD_HEADLESS TRUE )
 #    SURGE_(os)_SOURCES
 
 set(SURGE_SHARED_SOURCES
-  src/common/dsp/effect/BBDEnsembleEffect.cpp
-  src/common/dsp/effect/ChorusEffectImpl.h
-  src/common/dsp/effect/CombulatorEffect.cpp
-  src/common/dsp/effect/ConditionerEffect.cpp
-  src/common/dsp/effect/DistortionEffect.cpp
-  src/common/dsp/effect/DualDelayEffect.cpp
-  src/common/dsp/effect/Effect.cpp
-  src/common/dsp/effect/Eq3BandEffect.cpp
-  src/common/dsp/effect/FreqshiftEffect.cpp
-  src/common/dsp/effect/FlangerEffect.cpp
-  src/common/dsp/effect/GEQ11Effect.cpp
-  src/common/dsp/effect/NimbusEffect.cpp
-  src/common/dsp/effect/PhaserEffect.cpp
-  src/common/dsp/effect/ResonatorEffect.cpp
-  src/common/dsp/effect/Reverb1Effect.cpp
-  src/common/dsp/effect/Reverb2Effect.cpp
-  src/common/dsp/effect/RingModulatorEffect.cpp
-  src/common/dsp/effect/RotarySpeakerEffect.cpp
-  src/common/dsp/effect/TreemonsterEffect.cpp
-  src/common/dsp/effect/VocoderEffect.cpp
-  src/common/dsp/effect/airwindows/AirWindowsEffect.cpp
-  src/common/dsp/effect/airwindows/AirWindowsEffect.h
-  src/common/dsp/effect/chowdsp/CHOWEffect.cpp
-  src/common/dsp/effect/chowdsp/ExciterEffect.cpp
-  src/common/dsp/effect/chowdsp/NeuronEffect.cpp
-  src/common/dsp/effect/chowdsp/TapeEffect.cpp
-  src/common/dsp/effect/chowdsp/bbd_utils/BBDDelayLine.cpp
-  src/common/dsp/effect/chowdsp/exciter/LevelDetector.cpp
-  src/common/dsp/effect/chowdsp/shared/DelayLine.cpp
-  src/common/dsp/effect/chowdsp/tape/ChewProcessor.cpp
-  src/common/dsp/effect/chowdsp/tape/DegradeProcessor.cpp
-  src/common/dsp/effect/chowdsp/tape/HysteresisProcessing.cpp
-  src/common/dsp/effect/chowdsp/tape/HysteresisProcessor.cpp
-  src/common/dsp/effect/chowdsp/tape/LossFilter.cpp
-  src/common/dsp/effect/chowdsp/tape/ToneControl.cpp
-  src/common/dsp/filters/VintageLadders.cpp
-  src/common/dsp/filters/Obxd.cpp
-  src/common/dsp/filters/K35.cpp
+  src/common/dsp/effects/BBDEnsembleEffect.cpp
+  src/common/dsp/effects/ChorusEffectImpl.h
+  src/common/dsp/effects/CombulatorEffect.cpp
+  src/common/dsp/effects/ConditionerEffect.cpp
+  src/common/dsp/effects/DistortionEffect.cpp
+  src/common/dsp/effects/DelayEffect.cpp
+  src/common/dsp/effects/FrequencyShifterEffect.cpp
+  src/common/dsp/effects/FlangerEffect.cpp
+  src/common/dsp/effects/GraphicEQ11BandEffect.cpp
+  src/common/dsp/effects/NimbusEffect.cpp
+  src/common/dsp/effects/ParametricEQ3BandEffect.cpp
+  src/common/dsp/effects/PhaserEffect.cpp
+  src/common/dsp/effects/ResonatorEffect.cpp
+  src/common/dsp/effects/Reverb1Effect.cpp
+  src/common/dsp/effects/Reverb2Effect.cpp
+  src/common/dsp/effects/RingModulatorEffect.cpp
+  src/common/dsp/effects/RotarySpeakerEffect.cpp
+  src/common/dsp/effects/TreemonsterEffect.cpp
+  src/common/dsp/effects/VocoderEffect.cpp
+  src/common/dsp/effects/airwindows/AirWindowsEffect.cpp
+  src/common/dsp/effects/airwindows/AirWindowsEffect.h
+  src/common/dsp/effects/chowdsp/CHOWEffect.cpp
+  src/common/dsp/effects/chowdsp/ExciterEffect.cpp
+  src/common/dsp/effects/chowdsp/NeuronEffect.cpp
+  src/common/dsp/effects/chowdsp/TapeEffect.cpp
+  src/common/dsp/effects/chowdsp/bbd_utils/BBDDelayLine.cpp
+  src/common/dsp/effects/chowdsp/exciter/LevelDetector.cpp
+  src/common/dsp/effects/chowdsp/shared/DelayLine.cpp
+  src/common/dsp/effects/chowdsp/tape/ChewProcessor.cpp
+  src/common/dsp/effects/chowdsp/tape/DegradeProcessor.cpp
+  src/common/dsp/effects/chowdsp/tape/HysteresisProcessing.cpp
+  src/common/dsp/effects/chowdsp/tape/HysteresisProcessor.cpp
+  src/common/dsp/effects/chowdsp/tape/LossFilter.cpp
+  src/common/dsp/effects/chowdsp/tape/ToneControl.cpp
+  src/common/dsp/filters/AllpassFilter.h
+  src/common/dsp/filters/BiquadFilter.cpp
+  src/common/dsp/filters/BiquadFilterSSE2.cpp
   src/common/dsp/filters/DiodeLadder.cpp
+  src/common/dsp/filters/FilterCoefficientMaker.cpp
+  src/common/dsp/filters/K35Filter.cpp
   src/common/dsp/filters/NonlinearFeedback.cpp
   src/common/dsp/filters/NonlinearStates.cpp
-  src/common/dsp/AliasOscillator.cpp
-  src/common/dsp/AudioInputOscillator.cpp
-  src/common/dsp/BiquadFilter.cpp
-  src/common/dsp/BiquadFilterSSE2.cpp
-  src/common/dsp/ClassicOscillator.cpp
-  src/common/dsp/DspUtilities.cpp
-  src/common/dsp/FilterCoefficientMaker.cpp
-  src/common/dsp/FM2Oscillator.cpp
-  src/common/dsp/FM3Oscillator.cpp
-  src/common/dsp/LanczosResampler.cpp
-  src/common/dsp/LfoModulationSource.cpp
-  src/common/dsp/ModernOscillator.cpp
-  src/common/dsp/MSEGModulationHelper.cpp
+  src/common/dsp/filters/OBXDFilter.cpp
+  src/common/dsp/filters/ThreelerFilter.cpp
+  src/common/dsp/filters/VectorizedSVFilter.cpp
+  src/common/dsp/filters/VintageLadders.cpp
+  src/common/dsp/oscillators/AliasOscillator.cpp
+  src/common/dsp/oscillators/AudioInputOscillator.cpp
+  src/common/dsp/oscillators/ClassicOscillator.cpp
+  src/common/dsp/oscillators/FM2Oscillator.cpp
+  src/common/dsp/oscillators/FM3Oscillator.cpp
+  src/common/dsp/oscillators/ModernOscillator.cpp
+  src/common/dsp/oscillators/OscillatorBase.h
+  src/common/dsp/oscillators/OscillatorCommonFunctions.h
+  src/common/dsp/oscillators/SampleAndHoldOscillator.cpp
+  src/common/dsp/oscillators/SineOscillator.cpp
+  src/common/dsp/oscillators/StringOscillator.cpp
+  src/common/dsp/oscillators/TwistOscillator.cpp
+  src/common/dsp/oscillators/WavetableOscillator.cpp
+  src/common/dsp/oscillators/WindowOscillator.cpp
+  src/common/dsp/modulators/ADSRModulationSource.h
+  src/common/dsp/modulators/FormulaModulationHelper.cpp
+  src/common/dsp/modulators/LFOModulationSource.cpp
+  src/common/dsp/modulators/MSEGModulationHelper.cpp
+  src/common/dsp/utilities/DSPUtils.cpp
+  src/common/dsp/utilities/FastMath.h
+  src/common/dsp/utilities/SSEComplex.h
+  src/common/dsp/utilities/SSESincDelayLine.h
+  src/common/dsp/utilities/LanczosResampler.cpp
+  src/common/dsp/vembertech/basic_dsp.cpp
+  src/common/dsp/vembertech/halfratefilter.cpp
+  src/common/dsp/vembertech/lipol.cpp
+  src/common/dsp/Effect.cpp
   src/common/dsp/Oscillator.cpp
+  src/common/dsp/SurgeVoice.cpp
   src/common/dsp/QuadFilterChain.cpp
   src/common/dsp/QuadFilterUnit.cpp
-  src/common/dsp/SampleAndHoldOscillator.cpp
-  src/common/dsp/SineOscillator.cpp
-  src/common/dsp/StringOscillator.cpp
-  src/common/dsp/SurgeVoice.cpp
-  src/common/dsp/TwistOscillator.cpp
-  src/common/dsp/VectorizedSvfFilter.cpp
+  src/common/dsp/SurgeVoiceState.h
   src/common/dsp/Wavetable.cpp
-  src/common/dsp/WavetableOscillator.cpp
-  src/common/dsp/WindowOscillator.cpp
-  src/common/vt_dsp/basic_dsp.cpp
-  src/common/vt_dsp/halfratefilter.cpp
-  src/common/vt_dsp/lipol.cpp
-  src/common/vt_dsp/macspecific.cpp
+  src/common/dsp/WavetableScriptEvaluator.cpp
   src/common/CPUFeatures.cpp
   src/common/DebugHelpers.cpp
+        src/common/FxPresetAndClipboardManager.cpp
+  src/common/LuaSupport.cpp
   src/common/ModulatorPresetManager.cpp
   src/common/Parameter.cpp
   src/common/PatchDB.cpp
-  src/common/SurgePatch.cpp
-  src/common/SurgeStorage.cpp
-  src/common/UserDefaults.cpp
-  src/common/WavSupport.cpp
-
   src/common/SkinModel.cpp
   src/common/SkinModelImpl.cpp
   src/common/SkinColors.cpp
+  src/common/SurgePatch.cpp
+  src/common/SurgeStorage.cpp
+  src/common/UserDefaults.cpp
+  src/common/WAVFileSupport.cpp
 
   libs/strnatcmp/strnatcmp.cpp
-  src/common/dsp/FastMath.h
-  src/common/dsp/AdsrEnvelope.h
-  src/common/dsp/OscillatorBase.h
-  src/common/dsp/OscillatorCommonFunctions.h
-  src/common/dsp/SurgeVoiceState.h
   )
 
 set(SURGE_SYNTH_SOURCES
@@ -323,30 +339,7 @@ set(SURGE_GENERATED_SOURCES
   )
 
 set(SURGE_GUI_SOURCES
-  src/gui/CAboutBox.cpp
-        src/gui/CEffectLabel.h
-  src/gui/CEffectSettings.cpp
-  src/gui/CHSwitch2.cpp
-  src/gui/CLFOGui.cpp
-  src/gui/CMenuAsSlider.cpp
-  src/gui/CModulationSourceButton.cpp
-  src/gui/CNumberField.cpp
-  src/gui/COscillatorDisplay.cpp
-  src/gui/CParameterTooltip.h
-  src/gui/CPatchBrowser.cpp
   src/gui/CScalableBitmap.cpp
-  src/gui/CSnapshotMenu.cpp
-  src/gui/CSurgeHyperlink.cpp
-  src/gui/CSurgeSlider.cpp
-  src/gui/CSurgeVuMeter.cpp
-  src/gui/CSwitchControl.cpp
-  src/gui/CTextButtonWithHover.cpp
-  src/gui/CursorControlGuard.cpp
-  src/gui/CVerticalLabel.cpp
-  src/gui/guihelpers.cpp
-  src/gui/ModulationEditor.cpp
-  src/gui/MSEGEditor.cpp
-  src/gui/PatchDBViewer.cpp
   src/gui/RuntimeFont.cpp
   src/gui/SkinFontLoader.cpp
   src/gui/SkinImageMaps.h
@@ -354,19 +347,52 @@ set(SURGE_GUI_SOURCES
   src/gui/SurgeBitmaps.cpp
   src/gui/SurgeGUIEditor.cpp
   src/gui/SurgeGUIEditorHtmlGenerators.cpp
+  src/gui/SurgeGUIEditorInfowindow.cpp
+  src/gui/SurgeGUIEditorValueCallbacks.cpp
+  src/gui/SurgeGUIUtils.cpp
   src/gui/SurgeJUCELookAndFeel.cpp
-  src/gui/UIInstrumentation.cpp)
+  src/gui/UIInstrumentation.cpp
+
+  src/gui/overlays/AboutScreen.cpp
+  src/gui/overlays/LuaEditors.cpp
+  src/gui/overlays/MiniEdit.cpp
+  src/gui/overlays/ModulationEditor.cpp
+  src/gui/overlays/MSEGEditor.cpp
+  src/gui/overlays/PatchDBViewer.cpp
+  src/gui/overlays/TypeinParamEditor.cpp
+  src/gui/overlays/OverlayWrapper.cpp
+  src/gui/overlays/PatchStoreDialog.cpp
+
+  src/gui/widgets/EffectChooser.cpp
+  src/gui/widgets/LFOAndStepDisplay.cpp
+  src/gui/widgets/MainFrame.cpp
+  src/gui/widgets/MenuForDiscreteParams.cpp
+  src/gui/widgets/MultiSwitch.cpp
+  src/gui/widgets/ModulationSourceButton.cpp
+  src/gui/widgets/ModulatableSlider.cpp
+  src/gui/widgets/NumberField.cpp
+  src/gui/widgets/OscillatorWaveformDisplay.cpp
+  src/gui/widgets/ParameterInfowindow.cpp
+  src/gui/widgets/PatchSelector.cpp
+  src/gui/widgets/Switch.cpp
+  src/gui/widgets/VerticalLabel.cpp
+  src/gui/widgets/VuMeter.cpp
+  src/gui/widgets/XMLConfiguredMenus.cpp
+        )
 
 # Includes and Compiler Flags
 set(SURGE_COMMON_INCLUDES
   libs/
   libs/strnatcmp
-  libs/tuning-library/include
 
   src/common
   src/common/dsp
-  src/common/thread
-  src/common/vt_dsp
+  src/common/dsp/effects
+  src/common/dsp/filters
+  src/common/dsp/oscillators
+  src/common/dsp/modulators
+  src/common/dsp/utilities
+  src/common/dsp/vembertech
   )
 
 set(SURGE_GUI_INCLUDES
@@ -505,8 +531,8 @@ endif()
 source_group( "Libraries" REGULAR_EXPRESSION "libs/" )
 source_group( "AirWindows" REGULAR_EXPRESSION "libs/airwindows/" )
 source_group( "Surge Core" REGULAR_EXPRESSION "src/common/.*\.cpp" )
-source_group( "Surge DSP" REGULAR_EXPRESSION "src/common/(vt_dsp|dsp)" )
-source_group( "Surge FX" REGULAR_EXPRESSION "src/common/dsp/effect" )
+source_group( "Surge DSP" REGULAR_EXPRESSION "src/common/dsp" )
+source_group( "Surge FX" REGULAR_EXPRESSION "src/common/dsp/effects" )
 source_group( "Surge GUI" REGULAR_EXPRESSION "src/gui" )
 source_group( "Generated Code" REGULAR_EXPRESSION "version.cpp" )
 source_group( "AU Plugin" REGULAR_EXPRESSION "src/au" )
@@ -531,7 +557,6 @@ if( BUILD_HEADLESS )
     ${SURGE_OS_SOURCES}
     ${SURGE_GENERATED_SOURCES}
     src/headless/main.cpp
-    src/headless/LinkFixesHeadless.cpp
     src/headless/HeadlessUtils.cpp
     src/headless/Player.cpp
     src/headless/UnitTests.cpp
@@ -539,12 +564,14 @@ if( BUILD_HEADLESS )
     src/headless/UnitTestsDSP.cpp
     src/headless/UnitTestsFLT.cpp
     src/headless/UnitTestsFX.cpp
+    src/headless/UnitTestsINFRA.cpp
     src/headless/UnitTestsIO.cpp
     src/headless/UnitTestsMIDI.cpp
     src/headless/UnitTestsMOD.cpp
     src/headless/UnitTestsMSEG.cpp
     src/headless/UnitTestsPARAM.cpp
     src/headless/UnitTestsTUN.cpp
+    src/headless/UnitTestsLUA.cpp
     src/headless/HeadlessNonTestFunctions.cpp
     src/headless/HeadlessNonTestFunctions.h)
 
@@ -619,6 +646,23 @@ if(JUCE_SUPPORTS_LV2)
   )
 endif()
 
+set(SURGE_JUCE_ACCESSIBLE FALSE)
+if(EXISTS ${SURGE_JUCE_LOCATION}/modules/juce_gui_basics/accessibility/juce_AccessibilityHandler.h )
+  set(SURGE_JUCE_ACCESSIBLE TRUE)
+  message( STATUS "Including JUCE Accessibility Support")
+else()
+  message( STATUS "No JUCE Accessibility Support in this version" )
+endif()
+
+set(SURGE_JUCE_HOST_CONTEXT FALSE)
+if(EXISTS ${SURGE_JUCE_LOCATION}/modules/juce_audio_processors/processors/juce_AudioProcessorEditorHostContext.h )
+  set(SURGE_JUCE_HOST_CONTEXT TRUE)
+  message( STATUS "Including JUCE Host Context Support")
+else()
+  message( STATUS "No JUCE Host Context Support in this version" )
+endif()
+
+
 set(JUCE_ASIO_SUPPORT FALSE)
 if( BUILD_USING_MY_ASIO_LICENSE )
   message(STATUS "** BUILD WITH YOUR ASIO LICENSE **" )
@@ -660,9 +704,12 @@ if( BUILD_SURGE_EFFECTS_BANK )
   juce_add_plugin(surge-fx
           PRODUCT_NAME ${SURGE_FX_PRODUCT_NAME}
           COMPANY_NAME "Surge Synth Team"
+          COMPANY_WEBSITE "https://surge-synth-team.org/"
           BUNDLE_ID "org.surge-synth-team.surge-xt-fx"
           PLUGIN_MANUFACTURER_CODE VmbA
           PLUGIN_CODE SFXT
+
+          ICON_BIG "resources/surge_effects_bank/SurgeFXLogo.png"
 
           IS_SYNTH FALSE
           NEEDS_MIDI_INPUT FALSE
@@ -670,6 +717,10 @@ if( BUILD_SURGE_EFFECTS_BANK )
           IS_MIDI_EFFECT FALSE
 
           COPY_PLUGIN_AFTER_BUILD ${SURGE_COPY_AFTER_BUILD}
+
+          VST3_CATEGORIES Fx
+          VST2_CATEGORY kPlugCategEffect
+          AU_MAIN_TYPE kAudioUnitType_Effect
 
           LV2_URI https://surge-synthesizer.github.io/lv2/surge-xt-fx
           LV2_SHARED_LIBRARY_NAME SurgeXT_FX
@@ -703,6 +754,8 @@ if( BUILD_SURGE_EFFECTS_BANK )
           JUCE_DISPLAY_SPLASH_SCREEN=0
           JUCE_REPORT_APP_USAGE=0
 
+          JUCE_COREGRAPHICS_DRAW_ASYNC=1
+
           JUCE_ALSA=1
           JUCE_JACK=1
 
@@ -710,7 +763,7 @@ if( BUILD_SURGE_EFFECTS_BANK )
           JUCE_DIRECTSOUND=1
 
           TARGET_HEADLESS=1
-          
+
           )
 
   if (JUCE_ASIO_SUPPORT)
@@ -785,7 +838,7 @@ if( BUILD_SURGE_EFFECTS_BANK )
 endif() # build surge effects bank
 
 if( BUILD_SURGE_XT )
-  
+
   if( WIN32 AND ${CMAKE_SIZEOF_VOID_P} EQUAL 4 )
     set( SURGE_XT_PRODUCT_NAME "Surge XT (32-bit)" )
   else()
@@ -795,6 +848,7 @@ if( BUILD_SURGE_XT )
   juce_add_plugin(surge-xt
           PRODUCT_NAME ${SURGE_XT_PRODUCT_NAME}
           COMPANY_NAME "Surge Synth Team"
+          COMPANY_WEBSITE "https://surge-synth-team.org/"
           BUNDLE_ID "org.surge-synth-team.surge-xt"
           PLUGIN_MANUFACTURER_CODE VmbA
           PLUGIN_CODE SgXT
@@ -808,6 +862,10 @@ if( BUILD_SURGE_XT )
 
           COPY_PLUGIN_AFTER_BUILD ${SURGE_COPY_AFTER_BUILD}
 
+          VST3_CATEGORIES Instrument Synth
+          VST2_CATEGORY kPlugCategSynth
+          AU_MAIN_TYPE kAudioUnitType_MusicDevice
+
           LV2_URI https://surge-synthesizer.github.io/lv2/surge-xt
           LV2_SHARED_LIBRARY_NAME SurgeXT
 
@@ -820,6 +878,7 @@ if( BUILD_SURGE_XT )
           resources/classic-skin-svgs/*.svg
           resources/fonts/Lato*ttf
           resources/fonts/IndieFlower.ttf
+          resources/fonts/FiraMono-Regular.ttf
           )
 
   juce_add_binary_data( surge-xt-binary
@@ -828,6 +887,18 @@ if( BUILD_SURGE_XT )
   set_target_properties(surge-xt-binary PROPERTIES
           POSITION_INDEPENDENT_CODE TRUE
           )
+
+  if (${SURGE_JUCE_ACCESSIBLE})
+    set( SURGE_JUCE_ACCESSIBLE_DEFINE 1)
+  else()
+    set( SURGE_JUCE_ACCESSIBLE_DEFINE 0)
+  endif()
+
+  if (${SURGE_JUCE_HOST_CONTEXT})
+    set( SURGE_JUCE_HOST_CONTEXT_DEFINE 1)
+  else()
+    set( SURGE_JUCE_HOST_CONTEXT_DEFINE 0)
+  endif()
 
   target_compile_definitions(surge-xt PUBLIC
           JUCE_ALLOW_STATIC_NULL_VARIABLES=0
@@ -846,6 +917,11 @@ if( BUILD_SURGE_XT )
 
           JUCE_WASAPI=1
           JUCE_DIRECTSOUND=1
+
+          JUCE_CATCH_UNHANDLED_EXCEPTIONS=$<IF:$<CONFIG:DEBUG>,1,0>
+
+          SURGE_JUCE_ACCESSIBLE=${SURGE_JUCE_ACCESSIBLE_DEFINE}
+          SURGE_JUCE_HOST_CONTEXT=${SURGE_JUCE_HOST_CONTEXT_DEFINE}
 
           TARGET_JUCE_SYNTH=1
           TARGET_HEADLESS=1
@@ -1018,8 +1094,16 @@ add_custom_command(TARGET surge-xt-distribution
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_TARGET_BASE}
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${SURGE_PRODUCT_DIR}/ ${SURGE_XT_DIST_TARGET_BASE}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}
-        COMMAND ${CMAKE_COMMAND} -E tar cvf ${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}/surge-xt-alpha-${SXTVER}-${SXTOS}.zip --format=zip ${SURGE_XT_DIST_TARGET_BASE}
         )
+
+if( WIN32 )
+  # Windows gets the zips but only windows
+  add_custom_command(TARGET surge-xt-distribution
+          POST_BUILD
+          WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+          COMMAND ${CMAKE_COMMAND} -E tar cvf ${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}/surge-xt-${SXTOS}-${SXTVER}-pluginsonly.zip --format=zip ${SURGE_XT_DIST_TARGET_BASE}
+          )
+endif()
 
 # Build OS specific installers
 if( APPLE )
@@ -1038,6 +1122,17 @@ if( UNIX AND NOT APPLE )
           COMMAND ${CMAKE_COMMAND} -E echo ${CMAKE_SOURCE_DIR}/installer_linux/make_deb.sh "${SURGE_PRODUCT_DIR}" "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}" "${SXTVER}"
           COMMAND ${CMAKE_SOURCE_DIR}/scripts/installer_linux/make_deb.sh "${SURGE_PRODUCT_DIR}" "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}" "${SXTVER}"
           )
+
+add_custom_target(surge-xt-rpm)
+add_dependencies(surge-xt-rpm surge-staged-assets)
+
+  add_custom_command(TARGET surge-xt-rpm
+          POST_BUILD
+          WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+          COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}
+          COMMAND ${CMAKE_COMMAND} -E echo ${CMAKE_SOURCE_DIR}/installer_linux/make_rpm.sh "${SURGE_PRODUCT_DIR}" "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}" "${SXTVER}"
+          COMMAND ${CMAKE_SOURCE_DIR}/scripts/installer_linux/make_rpm.sh "${SURGE_PRODUCT_DIR}" "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}" "${SXTVER}"
+          )
 endif()
 
 if( WIN32 )
@@ -1047,7 +1142,6 @@ if( WIN32 )
   else()
     message(STATUS "Using NUGET from ${SURGE_NUGET_EXE}" )
     if(${CMAKE_SIZEOF_VOID_P} EQUAL 4)
-      message(STATUS "Skipping 32 bit build for now while we sort out plugin names" )
       add_custom_command(TARGET surge-xt-distribution
         POST_BUILD
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
@@ -1063,10 +1157,34 @@ if( WIN32 )
           COMMAND ${CMAKE_COMMAND} -E echo Tools.InnoSetup.6.1.2/tools/iscc.exe /DSURGE_SRC="${CMAKE_SOURCE_DIR}" /DSURGE_BIN="${CMAKE_BINARY_DIR}" "${CMAKE_SOURCE_DIR}/scripts/installer_win/surge.iss"
           COMMAND Tools.InnoSetup.6.1.2/tools/iscc.exe /O"${CMAKE_BINARY_DIR}/${SURGE_XT_DIST_OUTPUT_DIR}" /DSURGE_SRC="${CMAKE_SOURCE_DIR}" /DSURGE_BIN="${CMAKE_BINARY_DIR}" "${CMAKE_SOURCE_DIR}/scripts/installer_win/surge.iss"
         )
-    endif() 
+    endif()
   endif()
 endif()
 
+# Add CMake Install rules for LINUX only right now (mac and win use an installer)
+if( UNIX AND NOT APPLE)
+  if( BUILD_SURGE_XT)
+    install(TARGETS surge-xt_Standalone DESTINATION bin)
+    # Alas you would think you could just say
+    # install(TARGETS surge-xt_VST3 DESTINATION lib/vst3 )
+    # but you can't because surge-xt_VST3 points to the .so inside the VST3 bundle so instead say
+    install( DIRECTORY "${SURGE_XT_OUTPUT_DIR}/VST3/Surge XT.vst3" DESTINATION lib/vst3 )
+    if( JUCE_SUPPORTS_LV2 )
+      install(TARGETS surge-xt_LV2 DESTINATION lib/lv2 )
+    endif()
+  endif()
+  if( BUILD_SURGE_EFFECTS_BANK )
+    install(TARGETS surge-fx_Standalone DESTINATION bin)
+    # and again
+    # install(TARGETS surge-fx_VST3 DESTINATION lib/vst3 )
+    install( DIRECTORY "${SURGE_FX_OUTPUT_DIR}/VST3/Surge XT Effects.vst3" DESTINATION lib/vst3 )
+
+    if( JUCE_SUPPORTS_LV2 )
+      install(TARGETS surge-fx_LV2 DESTINATION lib/lv2)
+    endif()
+  endif()
+  install(DIRECTORY ${CMAKE_SOURCE_DIR}/resources/data/ DESTINATION share/surge-xt)
+endif()
 
 
 if( ${BUILD_SURGE_PYTHON_BINDINGS} )
@@ -1138,7 +1256,7 @@ if( APPLE )
           POST_BUILD
           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
           COMMAND echo "Installing local resources"
-          COMMAND rsync -r --delete "resources/data/" "\${HOME}/Library/Application Support/Surge/"
+          COMMAND rsync -r --delete "resources/data/" "\${HOME}/Library/Application Support/Surge XT/"
   )
 
   add_custom_target( install-resources-global )
@@ -1147,7 +1265,7 @@ if( APPLE )
           POST_BUILD
           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
           COMMAND echo "Installing global resources"
-          COMMAND rsync -r --delete "resources/data/" "/Library/Application Support/Surge/"
+          COMMAND rsync -r --delete "resources/data/" "/Library/Application Support/Surge XT/"
   )
 
 elseif( UNIX AND NOT APPLE )
@@ -1156,8 +1274,9 @@ elseif( UNIX AND NOT APPLE )
           TARGET install-resources-local
           POST_BUILD
           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-          COMMAND echo "Installing local resources into ~/.local/share/surge"
-          COMMAND rsync -r --delete "resources/data/" "\${HOME}/.local/share/surge/"
+          COMMAND echo "Installing local resources into ~/.local/share/surge-xt"
+          COMMAND ${CMAKE_COMMAND} -E make_directory "\${HOME}/.local/share/surge-xt/"
+          COMMAND rsync -r --delete "resources/data/" "\${HOME}/.local/share/surge-xt/"
   )
 
   add_custom_target( install-resources-global )
@@ -1165,9 +1284,9 @@ elseif( UNIX AND NOT APPLE )
           TARGET install-resources-global
           POST_BUILD
           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-          COMMAND echo "Installing local resources into ${CMAKE_INSTALL_PREFIX}/share/surge"
-          COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_INSTALL_PREFIX}/share/surge
-          COMMAND rsync -r --delete "resources/data/" "${CMAKE_INSTALL_PREFIX}/share/surge/"
+          COMMAND echo "Installing local resources into ${CMAKE_INSTALL_PREFIX}/share/surge-xt"
+          COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_INSTALL_PREFIX}/share/surge-xt"
+          COMMAND rsync -r --delete "resources/data/" "${CMAKE_INSTALL_PREFIX}/share/surge-xt/"
   )
 endif()
 

@@ -33,6 +33,8 @@ DefaultFonts::DefaultFonts()
                                                                   BinaryData::LatoRegular_ttfSize);
 #endif
 
+    firaMonoRegularTypeface = juce::Typeface::createSystemTypefaceFor(
+        BinaryData::FiraMonoRegular_ttf, BinaryData::FiraMonoRegular_ttfSize);
     displayFont = getLatoAtSize(9);
     patchNameFont = getLatoAtSize(13);
     lfoTypeFont = getLatoAtSize(8);
@@ -41,9 +43,14 @@ DefaultFonts::DefaultFonts()
 
 DefaultFonts::~DefaultFonts(){};
 
-juce::Font DefaultFonts::getLatoAtSize(float size, int style) const
+juce::Font DefaultFonts::getLatoAtSize(float size, juce::Font::FontStyleFlags style) const
 {
-    return juce::Font(latoRegularTypeface).withPointHeight(size);
+    return juce::Font(latoRegularTypeface).withPointHeight(size).withStyle(style);
+}
+
+juce::Font DefaultFonts::getFiraMonoAtSize(float size) const
+{
+    return juce::Font(firaMonoRegularTypeface).withPointHeight(size);
 }
 
 DefaultFonts *getFontManager()

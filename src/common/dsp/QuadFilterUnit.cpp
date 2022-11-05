@@ -1,15 +1,16 @@
 #include "QuadFilterUnit.h"
 #include "SurgeStorage.h"
-#include <vt_dsp/basic_dsp.h>
+#include <vembertech/basic_dsp.h>
 #include <iostream>
 #include "DebugHelpers.h"
 
 #include "filters/VintageLadders.h"
-#include "filters/Obxd.h"
-#include "filters/K35.h"
+#include "filters/OBXDFilter.h"
+#include "filters/K35Filter.h"
 #include "filters/DiodeLadder.h"
 #include "filters/NonlinearFeedback.h"
 #include "filters/NonlinearStates.h"
+#include "filters/ThreelerFilter.h"
 
 __m128 SVFLP12Aquad(QuadFilterUnitState *__restrict f, __m128 in)
 {
@@ -823,10 +824,10 @@ FilterUnitQFPtr GetQFPtrFilterUnit(int type, int subtype)
     case fut_obxd_2pole_bp:
     case fut_obxd_2pole_n:
         // All the differences are in subtype wrangling int he coefficnent maker
-        return ObxdFilter::process_2_pole;
+        return OBXDFilter::process_2_pole;
         break;
     case fut_obxd_4pole:
-        return ObxdFilter::process_4_pole;
+        return OBXDFilter::process_4_pole;
         break;
     case fut_k35_lp:
         return K35Filter::process_lp;
@@ -850,6 +851,9 @@ FilterUnitQFPtr GetQFPtrFilterUnit(int type, int subtype)
     case fut_resonancewarp_bp:
     case fut_resonancewarp_ap:
         return NonlinearStatesFilter::process;
+        break;
+    case fut_threeler:
+        return ThreelerFilter::process;
         break;
     case fut_none:
     case n_fu_types:
