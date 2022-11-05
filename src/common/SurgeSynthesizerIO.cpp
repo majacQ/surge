@@ -14,24 +14,15 @@
 */
 
 #include "SurgeSynthesizer.h"
-#include "DspUtilities.h"
+#include "DSPUtils.h"
 #include <time.h>
-#include <vt_dsp/vt_dsp_endian.h>
+#include <vembertech/vt_dsp_endian.h>
 
 #include "filesystem/import.h"
 
 #include <algorithm>
 #include <fstream>
 #include <iterator>
-#include "UserInteractions.h"
-
-#if TARGET_AUDIOUNIT
-#include "aulayer.h"
-#endif
-
-#if AU
-#include "aulayer.h"
-#endif
 
 using namespace std;
 
@@ -249,7 +240,7 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
         //}
         oss << "This error usually occurs when you attempt to load an .fxp that belongs to another "
                "plugin into Surge.";
-        Surge::UserInteractions::promptError(oss.str(), "Unknown FXP File");
+        storage.reportError(oss.str(), "Unknown FXP File");
         return false;
     }
 
@@ -309,20 +300,20 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
             }
             catch (Tunings::TuningError &e)
             {
-                Surge::UserInteractions::promptError(e.what(), "Error restoring tuning!");
+                storage.reportError(e.what(), "Error restoring tuning!");
                 storage.retuneTo12TETScaleC261Mapping();
             }
         }
         else
         {
-            auto okc = Surge::UserInteractions::promptOKCancel(
+            auto okc = storage.okCancelProvider(
                 std::string("Loaded patch contains a custom tuning, but there is ") +
                     "already a user-selected tuning in place. Do you want to replace the currently "
                     "loaded tuning " +
                     "with the tuning stored in the patch? (The rest of the patch will load "
                     "normally.)",
-                "Replace Tuning");
-            if (okc == Surge::UserInteractions::MessageResult::OK)
+                "Replace Tuning", SurgeStorage::CANCEL);
+            if (okc == SurgeStorage::OK)
             {
                 try
                 {
@@ -352,7 +343,7 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
                 }
                 catch (Tunings::TuningError &e)
                 {
-                    Surge::UserInteractions::promptError(e.what(), "Error Restoring Tuning");
+                    storage.reportError(e.what(), "Error Restoring Tuning");
                     storage.retuneTo12TETScaleC261Mapping();
                 }
             }
@@ -430,25 +421,54 @@ void SurgeSynthesizer::loadRaw(const void *data, int size, bool preset)
     patch_loaded = true;
     refresh_editor = true;
 
-    if (patchid < 0)
+    /*
+    ** new patch just loaded so I look up and set the current category and patch.
+    ** This is used to draw checkmarks in the menu. If for some reason we don't
+    ** find one, nothing will break
+    */
+    int inferredPatchId = -1;
+    int cnt = storage.patch_list.size();
+    string name = storage.getPatch().name;
+    string cat = storage.getPatch().category;
+    for (int p = 0; p < cnt; ++p)
     {
-        /*
-        ** new patch just loaded so I look up and set the current category and patch.
-        ** This is used to draw checkmarks in the menu. If for some reason we don't
-        ** find one, nothing will break
-        */
-        int cnt = storage.patch_list.size();
-        string name = storage.getPatch().name;
-        string cat = storage.getPatch().category;
-        for (int p = 0; p < cnt; ++p)
+        if (storage.patch_list[p].name == name &&
+            storage.patch_category[storage.patch_list[p].category].name == cat)
         {
-            if (storage.patch_list[p].name == name &&
-                storage.patch_category[storage.patch_list[p].category].name == cat)
-            {
-                current_category_id = storage.patch_list[p].category;
-                patchid = p;
-                break;
-            }
+            current_category_id = storage.patch_list[p].category;
+            inferredPatchId = p;
+            break;
+        }
+    }
+
+    if (inferredPatchId >= 0 && inferredPatchId != patchid)
+    {
+        // If the patchid is out of range or if it is the default overrule
+        if (patchid < 0 && patchid >= storage.patch_list.size())
+        {
+            patchid = inferredPatchId;
+        }
+        else if (storage.patch_list[patchid].name == storage.initPatchName &&
+                 storage.patch_category[storage.patch_list[patchid].category].name ==
+                     storage.initPatchCategory)
+        {
+            patchid = inferredPatchId;
+        }
+        else
+        {
+            /*
+             * I don't see how this could ever happen. Punt.
+             */
+            std::ostringstream oss;
+            oss << "Error infering patch id. Prior patchid was " << patchid << " inferred id is "
+                << inferredPatchId << "."
+                << "patch_list[patchid].name/cat = '" << storage.patch_list[patchid].name << "'/'"
+                << storage.patch_list[patchid].name << "' and initPatchNameCat are '"
+                << storage.initPatchName << "'/'" << storage.initPatchCategory << "'. Please "
+                << "share this error with Surge devs.";
+            std::cout << oss.str() << std::endl;
+            storage.reportError(oss.str(), "Software Error");
+            patchid = inferredPatchId;
         }
     }
 }
@@ -485,7 +505,7 @@ void SurgeSynthesizer::savePatch()
 
         if (!catPath.is_relative())
         {
-            Surge::UserInteractions::promptError(
+            storage.reportError(
                 "Please use relative paths when saving patches. Referring to drive names directly "
                 "and using absolute paths is not allowed!",
                 "Error");
@@ -497,7 +517,7 @@ void SurgeSynthesizer::savePatch()
     }
     catch (...)
     {
-        Surge::UserInteractions::promptError(
+        storage.reportError(
             "Exception occured while creating category folder! Most likely, invalid characters "
             "were used to name the category. Please remove suspicious characters and try again!",
             "Error");
@@ -507,18 +527,13 @@ void SurgeSynthesizer::savePatch()
     fs::path filename = savepath;
     filename /= string_to_path(storage.getPatch().name + ".fxp");
 
-    bool checkExists = true;
-#if LINUX
-    // Overwrite prompt hangs UI in Bitwig 3.3
-    checkExists = (hostProgram.find("bitwig") != std::string::npos);
-#endif
-    if (checkExists && fs::exists(filename))
+    if (fs::exists(filename))
     {
-        if (Surge::UserInteractions::promptOKCancel(
+        if (storage.okCancelProvider(
                 std::string("The patch '" + storage.getPatch().name + "' already exists in '" +
                             storage.getPatch().category +
                             "'. Are you sure you want to overwrite it?"),
-                std::string("Overwrite patch")) == Surge::UserInteractions::CANCEL)
+                std::string("Overwrite patch"), SurgeStorage::OK) == SurgeStorage::CANCEL)
             return;
     }
     savePatchToPath(filename);
@@ -530,7 +545,7 @@ void SurgeSynthesizer::savePatchToPath(fs::path filename)
 
     if (!f)
     {
-        Surge::UserInteractions::promptError(
+        storage.reportError(
             "Unable to save the patch to the specified path! Maybe it contains invalid characters?",
             "Error");
         return;

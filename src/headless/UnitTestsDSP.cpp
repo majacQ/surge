@@ -1,6 +1,4 @@
 #include <iostream>
-#include <iomanip>
-#include <sstream>
 #include <algorithm>
 
 #include "HeadlessUtils.h"
@@ -33,7 +31,7 @@ TEST_CASE("Simple Single Oscillator is Constant", "[dsp]")
     Surge::Headless::playerEvents_t heldC = Surge::Headless::makeHoldMiddleC(len);
     REQUIRE(heldC.size() == 2);
 
-    float *data = NULL;
+    float *data = nullptr;
     int nSamples, nChannels;
 
     Surge::Headless::playAsConfigured(surge, heldC, &data, &nSamples, &nChannels);
@@ -46,7 +44,7 @@ TEST_CASE("Simple Single Oscillator is Constant", "[dsp]")
     {
         rms += data[i] * data[i];
     }
-    rms /= nSamples * nChannels;
+    rms /= (float)(nSamples * nChannels);
     rms = sqrt(rms);
     REQUIRE(rms > 0.1);
     REQUIRE(rms < 0.101);
@@ -61,8 +59,7 @@ TEST_CASE("Simple Single Oscillator is Constant", "[dsp]")
     REQUIRE(zeroCrossings > 130);
     REQUIRE(zeroCrossings < 160);
 
-    if (data)
-        delete[] data;
+    delete[] data;
 }
 TEST_CASE("Unison Absolute and Relative", "[osc]")
 {
@@ -120,32 +117,32 @@ TEST_CASE("Unison Absolute and Relative", "[osc]")
 
     SECTION("Wavetable Oscillator")
     {
-        assertRelative("test-data/patches/Wavetable-Sin-Uni2-Relative.fxp");
-        assertAbsolute("test-data/patches/Wavetable-Sin-Uni2-Absolute.fxp");
+        assertRelative("resources/test-data/patches/Wavetable-Sin-Uni2-Relative.fxp");
+        assertAbsolute("resources/test-data/patches/Wavetable-Sin-Uni2-Absolute.fxp");
     }
 
     SECTION("Window Oscillator")
     {
-        assertRelative("test-data/patches/Window-Sin-Uni2-Relative.fxp");
-        assertAbsolute("test-data/patches/Window-Sin-Uni2-Absolute.fxp");
+        assertRelative("resources/test-data/patches/Window-Sin-Uni2-Relative.fxp");
+        assertAbsolute("resources/test-data/patches/Window-Sin-Uni2-Absolute.fxp");
     }
 
     SECTION("Classic Oscillator")
     {
-        assertRelative("test-data/patches/Classic-Uni2-Relative.fxp");
-        assertAbsolute("test-data/patches/Classic-Uni2-Absolute.fxp");
+        assertRelative("resources/test-data/patches/Classic-Uni2-Relative.fxp");
+        assertAbsolute("resources/test-data/patches/Classic-Uni2-Absolute.fxp");
     }
 
     SECTION("SH Oscillator")
     {
-        assertRelative("test-data/patches/SH-Uni2-Relative.fxp");
-        assertAbsolute("test-data/patches/SH-Uni2-Absolute.fxp");
+        assertRelative("resources/test-data/patches/SH-Uni2-Relative.fxp");
+        assertAbsolute("resources/test-data/patches/SH-Uni2-Absolute.fxp");
     }
 }
 
 TEST_CASE("Unison at Sample Rates", "[osc]")
 {
-    auto assertRelative = [](std::shared_ptr<SurgeSynthesizer> surge, const char *pn) {
+    auto assertRelative = [](const std::shared_ptr<SurgeSynthesizer> &surge, const char *pn) {
         REQUIRE(surge->loadPatchByPath(pn, -1, "Test"));
         auto f60_0 = frequencyForNote(surge, 60, 5, 0);
         auto f60_1 = frequencyForNote(surge, 60, 5, 1);
@@ -164,7 +161,7 @@ TEST_CASE("Unison at Sample Rates", "[osc]")
         REQUIRE(f72_1 / f60_1 == Approx(2).margin(0.01));
     };
 
-    auto assertAbsolute = [](std::shared_ptr<SurgeSynthesizer> surge, const char *pn,
+    auto assertAbsolute = [](const std::shared_ptr<SurgeSynthesizer> &surge, const char *pn,
                              bool print = false) {
         REQUIRE(surge->loadPatchByPath(pn, -1, "Test"));
         auto f60_0 = frequencyForNote(surge, 60, 5, 0);
@@ -202,7 +199,7 @@ TEST_CASE("Unison at Sample Rates", "[osc]")
         }
     };
 
-    auto randomAbsolute = [](std::shared_ptr<SurgeSynthesizer> surge, const char *pn,
+    auto randomAbsolute = [](const std::shared_ptr<SurgeSynthesizer> &surge, const char *pn,
                              bool print = false) {
         for (int i = 0; i < 10; ++i)
         {
@@ -234,11 +231,11 @@ TEST_CASE("Unison at Sample Rates", "[osc]")
             INFO("Wavetable test at " << sr);
             auto surge = Surge::Headless::createSurge(sr);
 
-            assertRelative(surge, "test-data/patches/Wavetable-Sin-Uni2-Relative.fxp");
-            assertAbsolute(surge, "test-data/patches/Wavetable-Sin-Uni2-Absolute.fxp");
+            assertRelative(surge, "resources/test-data/patches/Wavetable-Sin-Uni2-Relative.fxp");
+            assertAbsolute(surge, "resources/test-data/patches/Wavetable-Sin-Uni2-Absolute.fxp");
             // HF noise in the wavetable makes my detector unreliable at zero crossings in this case
             // It passes 99% of the time but leave this test out for now.
-            // randomAbsolute(surge, "test-data/patches/Wavetable-Sin-Uni2-Absolute.fxp");
+            // randomAbsolute(surge, "resources/test-data/patches/Wavetable-Sin-Uni2-Absolute.fxp");
         }
     }
 
@@ -249,9 +246,9 @@ TEST_CASE("Unison at Sample Rates", "[osc]")
             INFO("Window Oscillator test at " << sr);
             auto surge = Surge::Headless::createSurge(sr);
 
-            assertRelative(surge, "test-data/patches/Window-Sin-Uni2-Relative.fxp");
-            assertAbsolute(surge, "test-data/patches/Window-Sin-Uni2-Absolute.fxp");
-            randomAbsolute(surge, "test-data/patches/Window-Sin-Uni2-Absolute.fxp");
+            assertRelative(surge, "resources/test-data/patches/Window-Sin-Uni2-Relative.fxp");
+            assertAbsolute(surge, "resources/test-data/patches/Window-Sin-Uni2-Absolute.fxp");
+            randomAbsolute(surge, "resources/test-data/patches/Window-Sin-Uni2-Absolute.fxp");
         }
 
         for (auto sr : srs)
@@ -259,9 +256,9 @@ TEST_CASE("Unison at Sample Rates", "[osc]")
             INFO("Classic Oscillator test at " << sr);
             auto surge = Surge::Headless::createSurge(sr);
 
-            assertRelative(surge, "test-data/patches/Classic-Uni2-Relative.fxp");
-            assertAbsolute(surge, "test-data/patches/Classic-Uni2-Absolute.fxp");
-            randomAbsolute(surge, "test-data/patches/Classic-Uni2-Absolute.fxp");
+            assertRelative(surge, "resources/test-data/patches/Classic-Uni2-Relative.fxp");
+            assertAbsolute(surge, "resources/test-data/patches/Classic-Uni2-Absolute.fxp");
+            randomAbsolute(surge, "resources/test-data/patches/Classic-Uni2-Absolute.fxp");
         }
 
         for (auto sr : srs)
@@ -269,9 +266,9 @@ TEST_CASE("Unison at Sample Rates", "[osc]")
             INFO("SH Oscillator test at " << sr);
             auto surge = Surge::Headless::createSurge(sr);
 
-            assertRelative(surge, "test-data/patches/SH-Uni2-Relative.fxp");
-            assertAbsolute(surge, "test-data/patches/SH-Uni2-Absolute.fxp");
-            // randomAbsolute(surge, "test-data/patches/SH-Uni2-Absolute.fxp");
+            assertRelative(surge, "resources/test-data/patches/SH-Uni2-Relative.fxp");
+            assertAbsolute(surge, "resources/test-data/patches/SH-Uni2-Absolute.fxp");
+            // randomAbsolute(surge, "resources/test-data/patches/SH-Uni2-Absolute.fxp");
         }
     }
 }
@@ -350,9 +347,9 @@ TEST_CASE("lipol_ps class", "[dsp]")
         REQUIRE(storeTarget[nfloat - 1] == Approx(target));
 
         float dy = storeTarget[1] - storeTarget[0];
-        for (auto i = 1; i < nfloat; ++i)
+        for (auto j = 1; j < nfloat; ++j)
         {
-            REQUIRE(storeTarget[i] - storeTarget[i - 1] == Approx(dy).epsilon(1e-3));
+            REQUIRE(storeTarget[j] - storeTarget[j - 1] == Approx(dy).epsilon(1e-3));
         }
 
         REQUIRE(prevtarget + dy == Approx(storeTarget[0]));
@@ -954,7 +951,7 @@ TEST_CASE( "NaN Patch from Issue 1514", "[dsp]" )
 {
    auto surge = Surge::Headless::createSurge(44100);
    REQUIRE( surge );
-   REQUIRE( surge->loadPatchByPath( "test-data/patches/VinceyCrash1514.fxp", -1, "Test" ) );
+   REQUIRE( surge->loadPatchByPath( "resources/test-data/patches/VinceyCrash1514.fxp", -1, "Test" ) );
 
    for( int d=0; d<10; d++ )
    {
@@ -986,3 +983,30 @@ TEST_CASE( "NaN Patch from Issue 1514", "[dsp]" )
    
 }
 #endif
+
+TEST_CASE("BasicDSP", "[dsp]")
+{
+    SECTION("limit range ")
+    {
+        REQUIRE(limit_range(0.1, 0.2, 0.5) == 0.2);
+        REQUIRE(limit_range(0.2, 0.2, 0.5) == 0.2);
+        REQUIRE(limit_range(0.3, 0.2, 0.5) == 0.3);
+        REQUIRE(limit_range(0.4, 0.2, 0.5) == 0.4);
+        REQUIRE(limit_range(0.5, 0.2, 0.5) == 0.5);
+        REQUIRE(limit_range(0.6, 0.2, 0.5) == 0.5);
+
+        REQUIRE(limit_range(0.1f, 0.2f, 0.5f) == 0.2f);
+        REQUIRE(limit_range(0.2f, 0.2f, 0.5f) == 0.2f);
+        REQUIRE(limit_range(0.3f, 0.2f, 0.5f) == 0.3f);
+        REQUIRE(limit_range(0.4f, 0.2f, 0.5f) == 0.4f);
+        REQUIRE(limit_range(0.5f, 0.2f, 0.5f) == 0.5f);
+        REQUIRE(limit_range(0.6f, 0.2f, 0.5f) == 0.5f);
+
+        REQUIRE(limit_range(1, 2, 5) == 2);
+        REQUIRE(limit_range(2, 2, 5) == 2);
+        REQUIRE(limit_range(3, 2, 5) == 3);
+        REQUIRE(limit_range(4, 2, 5) == 4);
+        REQUIRE(limit_range(5, 2, 5) == 5);
+        REQUIRE(limit_range(6, 2, 5) == 5);
+    }
+}

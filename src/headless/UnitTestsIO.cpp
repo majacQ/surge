@@ -9,7 +9,6 @@
 #include "catch2/catch2.hpp"
 
 #include "UnitTestUtilities.h"
-#include "DeferredAssetLoader.h"
 #include <chrono>
 #include <thread>
 
@@ -33,7 +32,7 @@ TEST_CASE("We can read a collection of wavetables", "[io]")
     SECTION("Wavetable.wav")
     {
         auto wt = &(surge->storage.getPatch().scene[0].osc[0].wt);
-        surge->storage.load_wt_wav_portable("test-data/wav/Wavetable.wav", wt);
+        surge->storage.load_wt_wav_portable("resources/test-data/wav/Wavetable.wav", wt);
         REQUIRE(wt->size == 2048);
         REQUIRE(wt->n_tables == 256);
         REQUIRE((wt->flags & wtf_is_sample) == 0);
@@ -42,7 +41,7 @@ TEST_CASE("We can read a collection of wavetables", "[io]")
     SECTION("05_BELL.WAV")
     {
         auto wt = &(surge->storage.getPatch().scene[0].osc[0].wt);
-        surge->storage.load_wt_wav_portable("test-data/wav/05_BELL.WAV", wt);
+        surge->storage.load_wt_wav_portable("resources/test-data/wav/05_BELL.WAV", wt);
         REQUIRE(wt->size == 2048);
         REQUIRE(wt->n_tables == 33);
         REQUIRE((wt->flags & wtf_is_sample) == 0);
@@ -51,7 +50,7 @@ TEST_CASE("We can read a collection of wavetables", "[io]")
     SECTION("pluckalgo.wav")
     {
         auto wt = &(surge->storage.getPatch().scene[0].osc[0].wt);
-        surge->storage.load_wt_wav_portable("test-data/wav/pluckalgo.wav", wt);
+        surge->storage.load_wt_wav_portable("resources/test-data/wav/pluckalgo.wav", wt);
         REQUIRE(wt->size == 2048);
         REQUIRE(wt->n_tables == 9);
         REQUIRE((wt->flags & wtf_is_sample) == 0);
@@ -181,7 +180,7 @@ TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
     {
         auto surgeSrc = Surge::Headless::createSurge(44100);
         auto surgeDest = Surge::Headless::createSurge(44100);
-        Tunings::Scale s = Tunings::readSCLFile("test-data/scl/zeus22.scl");
+        Tunings::Scale s = Tunings::readSCLFile("resources/test-data/scl/zeus22.scl");
 
         REQUIRE(surgeSrc->storage.isStandardTuning);
         REQUIRE(surgeDest->storage.isStandardTuning);
@@ -207,7 +206,7 @@ TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
         auto surgeSrc = Surge::Headless::createSurge(44100);
         auto surgeDest = Surge::Headless::createSurge(44100);
 
-        auto k = Tunings::readKBMFile("test-data/scl/mapping-a440-constant.kbm");
+        auto k = Tunings::readKBMFile("resources/test-data/scl/mapping-a440-constant.kbm");
 
         REQUIRE(surgeSrc->storage.isStandardMapping);
         REQUIRE(surgeDest->storage.isStandardMapping);
@@ -317,7 +316,7 @@ TEST_CASE("Stream WaveTable Names", "[io]")
     {
         auto surge = Surge::Headless::createSurge(44100);
         REQUIRE(surge);
-        REQUIRE(surge->loadPatchByPath("test-data/patches/Church.fxp", -1, "Test"));
+        REQUIRE(surge->loadPatchByPath("resources/test-data/patches/Church.fxp", -1, "Test"));
         REQUIRE(std::string(surge->storage.getPatch().scene[0].osc[0].wavetable_display_name) ==
                 "(Patch Wavetable)");
     }
@@ -423,28 +422,28 @@ TEST_CASE("Load Patches with Embedded KBM")
     {
         {
             auto surge = Surge::Headless::createSurge(44100);
-            surge->loadPatchByPath("test-data/patches/HasKBM.fxp", -1, "Test");
+            surge->loadPatchByPath("resources/test-data/patches/HasKBM.fxp", -1, "Test");
             REQUIRE(!surge->storage.isStandardTuning);
             REQUIRE(!surge->storage.isStandardMapping);
         }
 
         {
             auto surge = Surge::Headless::createSurge(44100);
-            surge->loadPatchByPath("test-data/patches/HasSCL.fxp", -1, "Test");
+            surge->loadPatchByPath("resources/test-data/patches/HasSCL.fxp", -1, "Test");
             REQUIRE(!surge->storage.isStandardTuning);
             REQUIRE(surge->storage.isStandardMapping);
         }
 
         {
             auto surge = Surge::Headless::createSurge(44100);
-            surge->loadPatchByPath("test-data/patches/HasSCLandKBM.fxp", -1, "Test");
+            surge->loadPatchByPath("resources/test-data/patches/HasSCLandKBM.fxp", -1, "Test");
             REQUIRE(!surge->storage.isStandardTuning);
             REQUIRE(!surge->storage.isStandardMapping);
         }
 
         {
             auto surge = Surge::Headless::createSurge(44100);
-            surge->loadPatchByPath("test-data/patches/HasSCL_165Vintage.fxp", -1, "Test");
+            surge->loadPatchByPath("resources/test-data/patches/HasSCL_165Vintage.fxp", -1, "Test");
             REQUIRE(!surge->storage.isStandardTuning);
             REQUIRE(surge->storage.isStandardMapping);
         }
@@ -475,7 +474,7 @@ TEST_CASE("IDs are Stable", "[io]")
 
     SECTION("Compare IDs")
     {
-        std::string idfile = "test-data/param-ids-1.6.5.txt";
+        std::string idfile = "resources/test-data/param-ids-1.6.5.txt";
         INFO("Comparing current surge with " << idfile);
 
         // Step one: Read the file
@@ -557,7 +556,8 @@ TEST_CASE("Patch Version Builder", "[io]")
                     }
                 }
                 std::ostringstream oss;
-                oss << "test-data/patches/all-filters/s14/filt_" << i << "_" << j << ".fxp";
+                oss << "resources/test-data/patches/all-filters/s14/filt_" << i << "_" << j
+                    << ".fxp";
                 auto p = string_to_path(oss.str());
                 surge->savePatchToPath(p);
             }
@@ -585,7 +585,8 @@ TEST_CASE("Patch Version Builder", "[io]")
                     }
                 }
                 std::ostringstream oss;
-                oss << "test-data/patches/all-filters/s15/filt_" << i << "_" << j << ".fxp";
+                oss << "resources/test-data/patches/all-filters/s15/filt_" << i << "_" << j
+                    << ".fxp";
                 auto p = string_to_path(oss.str());
                 surge->savePatchToPath(p);
             }
@@ -593,7 +594,7 @@ TEST_CASE("Patch Version Builder", "[io]")
     }
 #endif
 
-    auto p14 = string_to_path("test-data/patches/all-filters/s14");
+    auto p14 = string_to_path("resources/test-data/patches/all-filters/s14");
     for (auto ent : fs::directory_iterator(p14))
     {
         DYNAMIC_SECTION("Test SV14 Filter " << path_to_string(ent))
@@ -699,7 +700,7 @@ TEST_CASE("Patch Version Builder", "[io]")
         }
     }
 
-    auto p15 = string_to_path("test-data/patches/all-filters/s15");
+    auto p15 = string_to_path("resources/test-data/patches/all-filters/s15");
     for (auto ent : fs::directory_iterator(p15))
     {
         DYNAMIC_SECTION("Test SV15 Filters " << path_to_string(ent))
@@ -762,93 +763,3 @@ TEST_CASE("MonoVoicePriority Streams", "[io]")
         }
     }
 }
-
-#if BUILD_DEFERRED_ASSET_LOADER
-TEST_CASE("Deferred Asset Loader", "[io]")
-{
-    auto skipThisTest = (getenv("SURGE_DISABLE_NETWORK_TESTS") != nullptr);
-    if (skipThisTest)
-    {
-        SECTION("Skipping Network Tests") { REQUIRE(skipThisTest); }
-        return;
-    }
-
-    SECTION("Retrieve a single image")
-    {
-        auto surge = Surge::Headless::createSurge(44100);
-
-        auto dal = Surge::Storage::DeferredAssetLoader(&(surge->storage));
-        REQUIRE(surge);
-
-        std::string testUrl = "https://surge-synthesizer.github.io/assets/images/test/Music.png";
-        // In the event we have a documents cache already make the name random. Add time later
-        testUrl += "?rand=" + std::to_string(rand());
-
-        auto n = std::chrono::system_clock::now();
-        auto es = std::chrono::duration_cast<std::chrono::seconds>(n.time_since_epoch());
-        testUrl += "&time=" + std::to_string(es.count());
-
-        INFO("Trying test URL " << testUrl)
-        REQUIRE(!dal.hasCachedCopyOf(testUrl));
-
-        INFO("Retrieving " << testUrl);
-        std::atomic<bool> got(false);
-        dal.retrieveSingleAsset(
-            testUrl, [&got](const Surge::Storage::DeferredAssetLoader::url_t &) { got = true; },
-            [](auto &u, const std::string &msg) { REQUIRE(false); });
-
-        int tries = 2; // make this longer before I commit
-        while (tries > 0 && !got)
-        {
-            INFO("Try " << tries)
-            std::this_thread::sleep_for(1000ms);
-            tries--;
-        }
-
-        REQUIRE(got);
-        REQUIRE(dal.hasCachedCopyOf(testUrl));
-        REQUIRE(fs::exists(dal.pathOfCachedCopy(testUrl)));
-    }
-
-    SECTION("Retrieve a missing image")
-    {
-        auto surge = Surge::Headless::createSurge(44100);
-
-        auto dal = Surge::Storage::DeferredAssetLoader(&(surge->storage));
-        REQUIRE(surge);
-
-        std::string testUrl =
-            "https://surge-synthesizer.github.io/assets/images/test/NOT_THERE_AT_ALL.png";
-        // In the event we have a documents cache already make the name random. Add time later
-        testUrl += "?rand=" + std::to_string(rand());
-
-        auto n = std::chrono::system_clock::now();
-        auto es = std::chrono::duration_cast<std::chrono::seconds>(n.time_since_epoch());
-        testUrl += "&time=" + std::to_string(es.count());
-
-        INFO("Trying test URL " << testUrl)
-        REQUIRE(!dal.hasCachedCopyOf(testUrl));
-
-        INFO("Retrieving " << testUrl);
-        std::atomic<bool> got(false), erred(false);
-        std::string msg;
-        dal.retrieveSingleAsset(
-            testUrl, [&got](const Surge::Storage::DeferredAssetLoader::url_t &) { got = true; },
-            [&erred, &msg](auto &u, const std::string &em) {
-                msg = em;
-                erred = true;
-            });
-
-        int tries = 20;
-        while (tries > 0 && !(got || erred))
-        {
-            std::this_thread::sleep_for(1000ms);
-            tries--;
-        }
-
-        REQUIRE(!got);
-        REQUIRE(erred);
-        REQUIRE(!dal.hasCachedCopyOf(testUrl));
-    }
-}
-#endif

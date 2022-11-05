@@ -37,6 +37,9 @@
 #include <chrono>
 
 #include "Tunings.h"
+#include "PatchDB.h"
+#include <unordered_set>
+#include "UserDefaults.h"
 
 #if WINDOWS
 #define PATH_SEPARATOR '\\'
@@ -76,16 +79,19 @@ const int FIRoffsetI16 = FIRipolI16_N >> 1;
 // 10 -> 11 (1.6.2 release) added DAW extra state
 // 11 -> 12 (1.6.3 release) added new parameters to the Distortion effect
 // 12 -> 13 (1.7.0 release) slider deactivation
-//                          sine LP/HP filters
-//                          sine/FM2/FM3 feedback extension/bipolar
-// 13 -> 14 (1.8.0 nightlies) add phaser stages/center/spread parameters
-//                            add ability to configure vocoder modulator mono/sterao/L/R
+//                          Sine LP/HP filters
+//                          Sine/FM2/FM3 feedback extension/bipolar
+// 13 -> 14 (1.8.0 nightlies) add Phaser stages/center/spread parameters
+//                            add ability to configure Vocoder modulator mono/sterao/L/R input
 //                            add comb filter tuning and compatibility block
 // 14 -> 15 (1.8.0 release) apply the great filter remap (GitHub issue #3006)
 // 15 -> 16 (1.9.0 release) implement oscillator retrigger consistently (GitHub issue #3171)
 //                          add tuningApplicationMode to patch
+//                          add disable toggle to various low/high cut filters in various effects
+//                          add disable toggle to Phaser rate, and different waveform options
+// 16 -> 17 (XT 1.0 release) wavetable oscillator continuous morph toggle
 
-const int ff_revision = 16;
+const int ff_revision = 17;
 
 extern float sinctable alignas(16)[(FIRipol_M + 1) * FIRipol_N * 2];
 extern float sinctable1X alignas(16)[(FIRipol_M + 1) * FIRipol_N];
@@ -360,14 +366,14 @@ enum lfo_type
     lt_envelope,
     lt_stepseq,
     lt_mseg,
-    lt_function,
+    lt_formula,
 
     n_lfo_types,
 };
 
 const char lt_names[n_lfo_types][32] = {
     "Sine",          "Triangle", "Square",         "Sawtooth", "Noise",
-    "Sample & Hold", "Envelope", "Step Sequencer", "MSEG",     "Function (work in progress!)",
+    "Sample & Hold", "Envelope", "Step Sequencer", "MSEG",     "Formula",
 };
 
 const int lt_num_deforms[n_lfo_types] = {
@@ -376,11 +382,11 @@ const int lt_num_deforms[n_lfo_types] = {
     0, // lt_square
     3, // lt_ramp
     0, // lt_noise
-    0, // lt_snh
+    2, // lt_snh
     3, // lt_envelope
     0, // lt_stepseq
     0, // lt_mseg
-    3, // lt_function
+    3, // lt_formula
 };
 
 /*
@@ -481,6 +487,10 @@ struct OscillatorStorage : public CountedSetUserData // The counted set is the w
     Wavetable wt;
 #define WAVETABLE_DISPLAY_NAME_SIZE 256
     char wavetable_display_name[WAVETABLE_DISPLAY_NAME_SIZE];
+    std::string wavetable_formula = "";
+    int wavetable_formula_res_base = 5, // 32 * 2^this
+        wavetable_formula_nframes = 10;
+
     void *queue_xmldata;
     int queue_type;
 
@@ -594,8 +604,10 @@ struct MSEGStorage
                       // MSEGModulationHelper::rebuildCache will set it
         float dragv1; // Only used in the endpoint
         float cpduration, cpv, dragcpv, dragcpratio = 0.5;
-        bool useDeform = true;
-        bool invertDeform = false;
+
+        bool useDeform = true, invertDeform = false;
+        bool retriggerFEG = false, retriggerAEG = false;
+
         enum Type
         {
             LINEAR = 1,
@@ -668,8 +680,26 @@ struct MSEGStorage
     static constexpr float minimumDuration = 0.0;
 };
 
+#if HAS_LUAJIT
+#define HAS_FORMULA_MODULATOR 1
+#endif
+
 struct FormulaModulatorStorage
-{ // Currently an unused placeholder
+{
+    std::string formulaString = "";
+    size_t formulaHash = 0;
+
+    // these values stream so don't change the numerical equivalents
+    enum Interpreter
+    {
+        LUA = 1001
+    } interpreter = LUA;
+
+    void setFormula(const std::string &s)
+    {
+        formulaString = s;
+        formulaHash = std::hash<std::string>{}(s);
+    }
 };
 
 /*
@@ -765,6 +795,8 @@ class SurgePatch
     void msegFromXMLElement(MSEGStorage *ms, TiXmlElement *parent, bool restoreSnaps) const;
     void stepSeqToXmlElement(StepSequencerStorage *ss, TiXmlElement &parent, bool streamMask) const;
     void stepSeqFromXmlElement(StepSequencerStorage *ss, TiXmlElement *parent) const;
+    void formulaToXMLElement(FormulaModulatorStorage *ms, TiXmlElement &parent) const;
+    void formulaFromXMLElement(FormulaModulatorStorage *ms, TiXmlElement *parent) const;
 
     void load_patch(const void *data, int size, bool preset);
     unsigned int save_patch(void **data);
@@ -800,7 +832,7 @@ class SurgePatch
     // metadata
     std::string name, category, author, comment;
     // metaparameters
-#define CUSTOM_CONTROLLER_LABEL_SIZE 16
+#define CUSTOM_CONTROLLER_LABEL_SIZE 20
     char CustomControllerLabel[n_customcontrollers][CUSTOM_CONTROLLER_LABEL_SIZE];
 
     int streamingRevision;
@@ -866,6 +898,46 @@ class alignas(16) SurgeStorage
 
     SurgeStorage(std::string suppliedDataPath = "");
 
+    // With XT surgestorage can now keep a cache of errors it reports to the user
+    void reportError(const std::string &msg, const std::string &title);
+    struct ErrorListener
+    {
+        // This can be called from any thread. Beware. But it is called only
+        // when an error occurs so if you want to be sloppy and just lock thats OK
+        virtual void onSurgeError(const std::string &msg, const std::string &title) = 0;
+    };
+    std::unordered_set<ErrorListener *> errorListeners;
+    std::mutex preListenerErrorMutex; // this mutex is ONLY locked in the error path and
+    // when registering a listener (from the UI thread)
+    std::vector<std::pair<std::string, std::string>> preListenerErrors;
+    void addErrorListener(ErrorListener *l)
+    {
+        errorListeners.insert(l);
+        std::lock_guard<std::mutex> g(preListenerErrorMutex);
+        for (auto p : preListenerErrors)
+            l->onSurgeError(p.first, p.second);
+        preListenerErrors.clear();
+    }
+    void removeErrorListener(ErrorListener *l) { errorListeners.erase(l); }
+
+    enum OkCancel
+    {
+        OK,
+        CANCEL
+    };
+
+    std::function<OkCancel(const std::string &msg, const std::string &title, OkCancel def)>
+        okCancelProvider =
+            [](const std::string &, const std::string &, OkCancel def) { return def; };
+    void clearOkCancelProvider()
+    {
+        okCancelProvider = [](const std::string &, const std::string &, OkCancel def) {
+            return def;
+        };
+    }
+
+    std::string initPatchName{"Init Saw"}, initPatchCategory{"Templates"};
+
     static constexpr int tuning_table_size = 512;
     float table_pitch alignas(16)[tuning_table_size];
     float table_pitch_inv alignas(16)[tuning_table_size];
@@ -878,6 +950,9 @@ class alignas(16) SurgeStorage
     float table_two_to_the_minus alignas(16)[1001];
 
     ~SurgeStorage();
+
+    std::unique_ptr<Surge::PatchStorage::PatchDB> patchDB;
+    void initializePatchDb();
 
     std::unique_ptr<SurgePatch> _patch;
 
@@ -915,9 +990,10 @@ class alignas(16) SurgeStorage
     void load_wt(int id, Wavetable *wt, OscillatorStorage *);
     void load_wt(std::string filename, Wavetable *wt, OscillatorStorage *);
     bool load_wt_wt(std::string filename, Wavetable *wt);
+    bool load_wt_wt_mem(const char *data, const size_t dataSize, Wavetable *wt);
     // void load_wt_wav(std::string filename, Wavetable* wt);
     bool load_wt_wav_portable(std::string filename, Wavetable *wt);
-    void export_wt_wav_portable(std::string fbase, Wavetable *wt);
+    std::string export_wt_wav_portable(std::string fbase, Wavetable *wt);
     void clipboard_copy(int type, int scene, int entry);
     void clipboard_paste(int type, int scene, int entry);
     int get_clipboard_type();
@@ -1144,7 +1220,7 @@ class alignas(16) SurgeStorage
      * Other users of surge may want to force clients to override user prefs.
      * Really we just use this to force the FX bank to 2 decimals for now. But...
      */
-    std::unordered_map<std::string, std::pair<int, std::string>> userPrefOverrides;
+    std::unordered_map<Surge::Storage::DefaultKey, std::pair<int, std::string>> userPrefOverrides;
 
     ControllerModulationSource::SmoothingMode smoothingMode =
         ControllerModulationSource::SmoothingMode::LEGACY;
@@ -1169,6 +1245,7 @@ class alignas(16) SurgeStorage
     int clipboard_type;
     StepSequencerStorage clipboard_stepsequences[n_lfos];
     MSEGStorage clipboard_msegs[n_lfos];
+    FormulaModulatorStorage clipboard_formulae[n_lfos];
     OscillatorStorage::ExtraConfigurationData clipboard_extraconfig[n_oscs];
     std::vector<ModulationRouting> clipboard_modulation_scene, clipboard_modulation_voice;
     Wavetable clipboard_wt[n_oscs];

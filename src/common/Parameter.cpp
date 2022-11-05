@@ -15,7 +15,7 @@
 
 #include "SurgeStorage.h"
 #include "Parameter.h"
-#include "DspUtilities.h"
+#include "DSPUtils.h"
 #include <cstring>
 #include <iomanip>
 #include <sstream>
@@ -273,6 +273,7 @@ bool Parameter::can_extend_range()
     case ct_freq_audible_with_very_low_lowerbound:
     case ct_percent_oscdrift:
     case ct_twist_aux_mix:
+    case ct_countedset_percent_extendable:
         return true;
     }
     return false;
@@ -448,6 +449,7 @@ void Parameter::set_user_data(ParamUserData *ud)
     switch (ctrltype)
     {
     case ct_countedset_percent:
+    case ct_countedset_percent_extendable:
         if (dynamic_cast<CountedSetUserData *>(ud))
         {
             user_data = ud;
@@ -472,6 +474,7 @@ void Parameter::set_user_data(ParamUserData *ud)
     case ct_airwindows_param:
     case ct_airwindows_param_bipolar:
     case ct_airwindows_param_integral:
+    case ct_percent_bipolar_w_dynamic_unipolar_formatting:
         if (dynamic_cast<ParameterExternalFormatter *>(ud))
         {
             user_data = ud;
@@ -990,6 +993,7 @@ void Parameter::set_type(int ctrltype)
         val_default.i = 0;
         break;
     case ct_countedset_percent:
+    case ct_countedset_percent_extendable:
         val_min.f = 0;
         val_max.f = 1;
         valtype = vt_float;
@@ -1210,6 +1214,7 @@ void Parameter::set_type(int ctrltype)
     case ct_lfodeform:
     case ct_rotarydrive:
     case ct_countedset_percent:
+    case ct_countedset_percent_extendable:
     case ct_lfoamplitude:
     case ct_reson_res_extendable:
     case ct_modern_trimix:
@@ -1652,6 +1657,7 @@ void Parameter::bound_value(bool force_integer)
             break;
         }
         case ct_countedset_percent:
+        case ct_countedset_percent_extendable:
         {
             CountedSetUserData *cs = reinterpret_cast<CountedSetUserData *>(user_data);
             auto count = cs->getCountedSetSize();
@@ -1766,9 +1772,9 @@ const char *Parameter::get_full_name()
     return fullname;
 }
 
-const char *Parameter::get_internal_name() { return name; }
+const char *Parameter::get_internal_name() const { return name; }
 
-const char *Parameter::get_storage_name() { return name_storage; }
+const char *Parameter::get_storage_name() const { return name_storage; }
 
 char *Parameter::get_storage_value(char *str)
 {
@@ -1997,7 +2003,8 @@ void Parameter::get_display_of_modulation_depth(char *txt, float modulationDepth
     int detailedMode = false;
 
     if (storage)
-        detailedMode = Surge::Storage::getUserDefaultValue(storage, "highPrecisionReadouts", 0);
+        detailedMode =
+            Surge::Storage::getUserDefaultValue(storage, Surge::Storage::HighPrecisionReadouts, 0);
 
     int dp = (detailedMode ? 6 : displayInfo.decimals);
 
@@ -2714,7 +2721,7 @@ void Parameter::get_display_alt(char *txt, bool external, float ef)
 
         if (storage)
         {
-            oct_offset = Surge::Storage::getUserDefaultValue(storage, "middleC", 1);
+            oct_offset = Surge::Storage::getUserDefaultValue(storage, Surge::Storage::MiddleC, 1);
         }
 
         snprintf(txt, TXT_SIZE, "~%s", get_notename(notename, i_value, oct_offset));
@@ -2730,7 +2737,7 @@ void Parameter::get_display_alt(char *txt, bool external, float ef)
 
         if (storage)
         {
-            oct_offset = Surge::Storage::getUserDefaultValue(storage, "middleC", 1);
+            oct_offset = Surge::Storage::getUserDefaultValue(storage, Surge::Storage::MiddleC, 1);
         }
 
         snprintf(txt, TXT_SIZE, "~%s", get_notename(notename, i_value, oct_offset));
@@ -2738,6 +2745,7 @@ void Parameter::get_display_alt(char *txt, bool external, float ef)
         break;
     }
     case ct_countedset_percent:
+    case ct_countedset_percent_extendable:
         if (user_data != nullptr)
         {
             // We check when set so the reinterpret cast is safe and fast
@@ -2764,6 +2772,20 @@ void Parameter::get_display_alt(char *txt, bool external, float ef)
         snprintf(txt, TXT_SIZE, "%s", bin.c_str());
         break;
     }
+    case ct_percent_bipolar_w_dynamic_unipolar_formatting:
+    {
+        auto ef = dynamic_cast<ParameterExternalFormatter *>(user_data);
+        if (ef)
+        {
+            float f;
+            char tmptxt[TXT_SIZE];
+            if (ef->formatAltValue(this, val.f, tmptxt, TXT_SIZE))
+            {
+                strncpy(txt, tmptxt, TXT_SIZE);
+                break;
+            }
+        }
+    }
     }
 }
 
@@ -2782,7 +2804,8 @@ void Parameter::get_display(char *txt, bool external, float ef)
     int detailedMode = 0;
 
     if (storage)
-        detailedMode = Surge::Storage::getUserDefaultValue(storage, "highPrecisionReadouts", 0);
+        detailedMode =
+            Surge::Storage::getUserDefaultValue(storage, Surge::Storage::HighPrecisionReadouts, 0);
 
     switch (valtype)
     {
@@ -2808,8 +2831,8 @@ void Parameter::get_display(char *txt, bool external, float ef)
             {
                 // parameter called 'len' not 'size', be on the safe side here, do - 1.
                 // It used to say just '64' anyway.
-                ef->formatValue(f, txt, TXT_SIZE - 1);
-                return;
+                if (ef->formatValue(this, f, txt, TXT_SIZE - 1))
+                    return;
             }
             // We do not break on purpose here. DelegatedToFormatter falls back to Linear with Scale
         }
@@ -2986,9 +3009,11 @@ void Parameter::get_display(char *txt, bool external, float ef)
             auto ef = dynamic_cast<ParameterExternalFormatter *>(user_data);
             if (ef)
             {
-                ef->formatValue(fv, vt, TXT_SIZE - 1);
-                snprintf(txt, TXT_SIZE, "%s", vt);
-                return;
+                if (ef->formatValue(this, fv, vt, TXT_SIZE - 1))
+                {
+                    snprintf(txt, TXT_SIZE, "%s", vt);
+                    return;
+                }
             }
         }
         switch (ctrltype)
@@ -3010,7 +3035,8 @@ void Parameter::get_display(char *txt, bool external, float ef)
 
             if (storage)
             {
-                oct_offset = Surge::Storage::getUserDefaultValue(storage, "middleC", 1);
+                oct_offset =
+                    Surge::Storage::getUserDefaultValue(storage, Surge::Storage::MiddleC, 1);
             }
 
             snprintf(txt, TXT_SIZE, "%s", get_notename(notename, val.i, oct_offset));
@@ -3115,7 +3141,14 @@ void Parameter::get_display(char *txt, bool external, float ef)
                             case fut_SNH:
                                 snprintf(txt, TXT_SIZE, "%s", fut_def_subtypes[i]);
                                 break;
-
+                            case fut_threeler:
+                                // "i & 3" selects the lower two bits that represent the filter
+                                // mode.
+                                // "(i >> 2) & 3" selects the next two bits that represent the
+                                // output stage.
+                                snprintf(txt, TXT_SIZE, "%s, %s", fut_threeler_subtypes[i & 3],
+                                         fut_threeler_output_stage[(i >> 2) & 3]);
+                                break;
                             case n_fu_types:
                                 snprintf(txt, TXT_SIZE, "ERROR");
                                 break;
@@ -3529,7 +3562,7 @@ void Parameter::set_value_f01(float v, bool force_integer)
     bound_value(force_integer);
 }
 
-float Parameter::get_modulation_f01(float mod)
+float Parameter::get_modulation_f01(float mod) const
 {
     if (ctrltype == ct_none)
         return 0;
@@ -3542,7 +3575,7 @@ float Parameter::get_modulation_f01(float mod)
     return limit_range(v, -1.0f, 1.0f);
 }
 
-float Parameter::set_modulation_f01(float v)
+float Parameter::set_modulation_f01(float v) const
 {
     if (ctrltype == ct_none)
         return 0;
@@ -3665,6 +3698,7 @@ bool Parameter::can_setvalue_from_string()
     case ct_oscspread:
     case ct_oscspread_bipolar:
     case ct_countedset_percent:
+    case ct_countedset_percent_extendable:
     case ct_flangerpitch:
     case ct_flangervoices:
     case ct_flangerspacing:
@@ -3804,7 +3838,8 @@ bool Parameter::set_value_from_string_onto(std::string s, pdata &onto)
                 // construct the integer note value
                 int oct_offset = 1;
                 if (storage)
-                    oct_offset = Surge::Storage::getUserDefaultValue(storage, "middleC", 1);
+                    oct_offset =
+                        Surge::Storage::getUserDefaultValue(storage, Surge::Storage::MiddleC, 1);
 
                 ni = ((oct + oct_offset) * 12 * neg) + val;
             }
@@ -3835,7 +3870,7 @@ bool Parameter::set_value_from_string_onto(std::string s, pdata &onto)
         if (ef)
         {
             float f;
-            if (ef->stringToValue(c, f))
+            if (ef->stringToValue(this, c, f))
             {
                 onto.f = limit_range(f, val_min.f, val_max.f);
                 return true;
@@ -3877,7 +3912,8 @@ bool Parameter::set_value_from_string_onto(std::string s, pdata &onto)
                 int oct_offset = 0;
                 if (storage)
                 {
-                    oct_offset = Surge::Storage::getUserDefaultValue(storage, "middleC", 1);
+                    oct_offset =
+                        Surge::Storage::getUserDefaultValue(storage, Surge::Storage::MiddleC, 1);
                 }
                 int note = 0, sf = 0;
                 if (s[0] >= 'a' && s[0] <= 'g')

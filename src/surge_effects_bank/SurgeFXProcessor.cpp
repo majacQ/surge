@@ -21,18 +21,7 @@ SurgefxAudioProcessor::SurgefxAudioProcessor()
 {
     effectNum = fxt_delay;
     storage.reset(new SurgeStorage());
-    if (samplerate < 10000 || samplerate > 96000 * 16)
-    {
-        // set the samplerate to *something* in case the initpath in resetFxType and so on
-        // reads the SR (which it can in some cases)
-        storage->setSamplerate(44100); // this will be replaced later but will stop nan on init
-    }
-    else
-    {
-        // Just make sure it is all consistent since this is a global from a separate DLL
-        storage->setSamplerate(samplerate);
-    }
-    storage->userPrefOverrides["highPrecisionReadouts"] = std::make_pair(0, "");
+    storage->userPrefOverrides[Surge::Storage::HighPrecisionReadouts] = std::make_pair(0, "");
 
     fxstorage = &(storage->getPatch().fx[0]);
     audio_thread_surge_effect.reset();

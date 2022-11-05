@@ -14,7 +14,7 @@
 */
 
 #include "SurgeVoice.h"
-#include "DspUtilities.h"
+#include "DSPUtils.h"
 #include "QuadFilterChain.h"
 #include <math.h>
 #include "libMTSClient.h"
@@ -338,7 +338,7 @@ void SurgeVoice::switch_toggled()
         float depth = iter->depth;
         if (modsources[src_id] && src_id == ms_keytrack)
         {
-            localcopy[dst_id].f += depth * modsources[ms_keytrack]->output;
+            localcopy[dst_id].f += depth * modsources[ms_keytrack]->output * (1 - iter->muted);
         }
         iter++;
     }
@@ -538,17 +538,17 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
     {
         if (lfo[i].retrigger_AEG)
         {
-            ((AdsrEnvelope *)modsources[ms_ampeg])->retrigger();
+            ((ADSRModulationSource *)modsources[ms_ampeg])->retrigger();
         }
         if (lfo[i].retrigger_FEG)
         {
-            ((AdsrEnvelope *)modsources[ms_filtereg])->retrigger();
+            ((ADSRModulationSource *)modsources[ms_filtereg])->retrigger();
         }
     }
 
     modsources[ms_ampeg]->process_block();
     modsources[ms_filtereg]->process_block();
-    if (((AdsrEnvelope *)modsources[ms_ampeg])->is_idle())
+    if (((ADSRModulationSource *)modsources[ms_ampeg])->is_idle())
         state.keep_playing = false;
 
     // TODO memcpy is bottleneck
@@ -568,7 +568,7 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
 
         if (modsources[src_id])
         {
-            localcopy[dst_id].f += depth * modsources[src_id]->output;
+            localcopy[dst_id].f += depth * modsources[src_id]->output * (1.0 - iter->muted);
         }
         iter++;
     }
@@ -590,7 +590,7 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
                 if (dst_id >= 0 && dst_id < n_scene_params)
                 {
                     float depth = iter->depth;
-                    localcopy[dst_id].f += depth * modsources[src_id]->output;
+                    localcopy[dst_id].f += depth * modsources[src_id]->output * (1.0 - iter->muted);
                 }
             }
             iter++;
@@ -621,8 +621,8 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
     if (state.porta_doretrigger)
     {
         state.porta_doretrigger = false;
-        ((AdsrEnvelope *)modsources[ms_ampeg])->retrigger();
-        ((AdsrEnvelope *)modsources[ms_filtereg])->retrigger();
+        ((ADSRModulationSource *)modsources[ms_ampeg])->retrigger();
+        ((ADSRModulationSource *)modsources[ms_filtereg])->retrigger();
     }
 
     float pb = modsources[ms_pitchbend]->output;
@@ -1012,7 +1012,7 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
     float Drive = db_to_linear(scene->wsunit.drive.get_extended(localcopy[id_drive].f));
     float Gain = db_to_linear(localcopy[id_vca].f + localcopy[id_vcavel].f * (1.f - state.fvel)) *
                  modsources[ms_ampeg]->output;
-    float FB = localcopy[id_feedback].f;
+    float FB = scene->feedback.get_extended(localcopy[id_feedback].f);
 
     if (Q)
     {
@@ -1094,6 +1094,7 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
                 case fut_resonancewarp_n:
                 case fut_resonancewarp_bp:
                 case fut_resonancewarp_ap:
+                case fut_threeler:
                     // subtype is stored in WP[0] for the entire quad.
                     // this is fine because integer parameters like this are not modulatable, and
                     // quads are only parallel across voices, so the quad would have identical
@@ -1182,5 +1183,9 @@ void SurgeVoice::freeAllocatedElements()
     {
         osc[i].reset(nullptr);
         osctype[i] = -1;
+    }
+    for (int i = 0; i < n_lfos_voice; ++i)
+    {
+        lfo[i].completedModulation();
     }
 }

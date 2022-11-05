@@ -13,16 +13,17 @@
 ** open source in September 2018.
 */
 
-#include "DspUtilities.h"
+#include "DSPUtils.h"
 #include "SurgeStorage.h"
-#include "UserInteractions.h"
 #include <set>
 #include <numeric>
 #include <cctype>
 #include <map>
 #include <queue>
-#include <vt_dsp/vt_dsp_endian.h>
+#include <vembertech/vt_dsp_endian.h>
 #include "UserDefaults.h"
+#include "SurgeCoreBinary.h"
+
 #if MAC
 #include <cstdlib>
 #include <sys/stat.h>
@@ -98,6 +99,24 @@ std::string getDLLPath()
 
 SurgeStorage::SurgeStorage(std::string suppliedDataPath) : otherscene_clients(0)
 {
+    if (samplerate == 0)
+    {
+        setSamplerate(48000);
+    }
+    else if (samplerate < 12000 || samplerate > 48000 * 32)
+    {
+        std::ostringstream oss;
+        oss << "Warning: SurgeStorage constructed with invalid samplerate :" << samplerate
+            << " - resetting to 48000 until Audio System tells us otherwise" << std::endl;
+        reportError(oss.str(), "SampleRate Corrputed on Startup");
+        setSamplerate(48000);
+    }
+    else
+    {
+        // Just in case, make sure we are completely consistent in all tables etc
+        setSamplerate(samplerate);
+    }
+
     _patch.reset(new SurgePatch(this));
 
     float cutoff = 0.455f;
@@ -216,18 +235,25 @@ SurgeStorage::SurgeStorage(std::string suppliedDataPath) : otherscene_clients(0)
 
 #if MAC
     char path[1024];
+    const char *buildOverrideDataPath = getenv("PIPELINE_OVERRIDE_DATA_HOME");
+    if (buildOverrideDataPath)
+    {
+        hasSuppliedDataPath = true;
+        suppliedDataPath = buildOverrideDataPath;
+    }
+
     if (!hasSuppliedDataPath)
     {
         FSRef foundRef;
         OSErr err = FSFindFolder(kUserDomain, kApplicationSupportFolderType, false, &foundRef);
         FSRefMakePath(&foundRef, (UInt8 *)path, 1024);
         std::string localpath = path;
-        localpath += "/Surge/";
+        localpath += "/Surge XT/";
 
         err = FSFindFolder(kLocalDomain, kApplicationSupportFolderType, false, &foundRef);
         FSRefMakePath(&foundRef, (UInt8 *)path, 1024);
         std::string rootpath = path;
-        rootpath += "/Surge/";
+        rootpath += "/Surge XT/";
 
         struct stat linfo;
         auto lxml = localpath + "configuration.xml";
@@ -255,11 +281,12 @@ SurgeStorage::SurgeStorage(std::string suppliedDataPath) : otherscene_clients(0)
 #elif LINUX
     if (!hasSuppliedDataPath)
     {
+        const char *buildOverrideDataPath = getenv("PIPELINE_OVERRIDE_DATA_HOME");
         const char *xdgDataPath = getenv("XDG_DATA_HOME");
-        std::string localDataPath = std::string(homePath) + "/.local/share/surge/";
+        std::string localDataPath = std::string(homePath) + "/.local/share/surge-xt/";
         if (xdgDataPath)
         {
-            datapath = std::string(xdgDataPath) + "/surge/";
+            datapath = std::string(xdgDataPath) + "/surge-xt/";
         }
         else if (fs::is_directory(string_to_path(localDataPath)))
         {
@@ -267,7 +294,7 @@ SurgeStorage::SurgeStorage(std::string suppliedDataPath) : otherscene_clients(0)
         }
         else
         {
-            datapath = std::string(homePath) + "/.local/share/Surge/";
+            datapath = std::string(homePath) + "/.local/share/Surge XT/";
         }
 
         /*
@@ -277,23 +304,30 @@ SurgeStorage::SurgeStorage(std::string suppliedDataPath) : otherscene_clients(0)
         if (!fs::is_directory(string_to_path(datapath)))
         {
             if (fs::is_directory(string_to_path(std::string(Surge::Build::CMAKE_INSTALL_PREFIX) +
-                                                "/share/surge")))
+                                                "/share/surge-xt")))
             {
-                datapath = std::string() + Surge::Build::CMAKE_INSTALL_PREFIX + "/share/surge";
+                datapath = std::string() + Surge::Build::CMAKE_INSTALL_PREFIX + "/share/surge-xt";
             }
             else if (fs::is_directory(string_to_path(
-                         std::string(Surge::Build::CMAKE_INSTALL_PREFIX) + "/share/Surge")))
+                         std::string(Surge::Build::CMAKE_INSTALL_PREFIX) + "/share/Surge XT")))
             {
-                datapath = std::string() + Surge::Build::CMAKE_INSTALL_PREFIX + "/share/Surge";
+                datapath = std::string() + Surge::Build::CMAKE_INSTALL_PREFIX + "/share/Surge XT";
             }
             else
             {
-                std::string systemDataPath = "/usr/share/surge/";
+                std::string systemDataPath = "/usr/share/surge-xt/";
                 if (fs::is_directory(string_to_path(systemDataPath)))
                     datapath = systemDataPath;
                 else
-                    datapath = "/usr/share/Surge/";
+                    datapath = "/usr/share/Surge XT/";
             }
+        }
+
+        if (buildOverrideDataPath)
+        {
+            datapath = std::string(buildOverrideDataPath);
+            std::cout << "WARNING: Surge Overriding DataPath to " << datapath << std::endl;
+            std::cout << "         Only use this in build pipelines please" << std::endl;
         }
     }
     else
@@ -368,7 +402,7 @@ SurgeStorage::SurgeStorage(std::string suppliedDataPath) : otherscene_clients(0)
 
         path.remove_filename();
         dllPath = path;
-        path /= L"SurgeData";
+        path /= L"SurgeXTData";
         if (fs::is_directory(path))
         {
             datapath = path_to_string(path);
@@ -382,7 +416,7 @@ bailOnPortable:
         if (!SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr, &commonAppData))
         {
             fs::path path(commonAppData);
-            path /= L"Surge";
+            path /= L"Surge XT";
             if (fs::is_directory(path))
             {
                 datapath = path_to_string(path);
@@ -396,7 +430,7 @@ bailOnPortable:
         if (!SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppData))
         {
             fs::path path(localAppData);
-            path /= L"Surge";
+            path /= L"Surge XT";
             datapath = path_to_string(path);
         }
     }
@@ -422,7 +456,7 @@ bailOnPortable:
     userDefaultFilePath = userDataPath;
 
     std::string userSpecifiedDataPath =
-        Surge::Storage::getUserDefaultValue(this, "userDataPath", "UNSPEC");
+        Surge::Storage::getUserDefaultValue(this, Surge::Storage::UserDataPath, "UNSPEC");
     if (userSpecifiedDataPath != "UNSPEC")
     {
         userDataPath = userSpecifiedDataPath;
@@ -435,13 +469,26 @@ bailOnPortable:
 
     userMidiMappingsPath = Surge::Storage::appendDirectory(userDataPath, "MIDIMappings");
 
+    /*
     const auto snapshotmenupath{string_to_path(datapath + "configuration.xml")};
 
     if (!snapshotloader.LoadFile(snapshotmenupath)) // load snapshots (& config-stuff)
     {
-        Surge::UserInteractions::promptError("Cannot find 'configuration.xml' in path '" +
+        reportError("Cannot find 'configuration.xml' in path '" +
                                                  datapath + "'. Please reinstall surge.",
                                              "Surge is not properly installed.");
+    }
+    */
+
+    // TIXML requires a newline at end.
+    auto cxmlData =
+        std::string(SurgeCoreBinary::configuration_xml, SurgeCoreBinary::configuration_xmlSize) +
+        "\n";
+    if (!snapshotloader.Parse(cxmlData.c_str()))
+    {
+        reportError("Cannot parse 'configuration.xml' in path '" + datapath +
+                        "'. Please reinstall surge.",
+                    "Surge is not properly installed.");
     }
 
     load_midi_controllers();
@@ -463,25 +510,15 @@ bailOnPortable:
 
     // WindowWT is a WaveTable which now has a constructor so don't do this
     // memset(&WindowWT, 0, sizeof(WindowWT));
-    if (loadWtAndPatch && !load_wt_wt(datapath + "windows.wt", &WindowWT))
+    if (loadWtAndPatch &&
+        !load_wt_wt_mem(SurgeCoreBinary::windows_wt, SurgeCoreBinary::windows_wtSize, &WindowWT))
     {
         WindowWT.size = 0;
         std::ostringstream oss;
-        oss << "Unable to load '" << datapath
-            << "windows.wt'. This file is required for Surge to work "
-            << "properly. This occurs when Surge is incorrectly installed and its resources are "
-               "not found at "
-#if MAC
-            << "the global or local user Library/Application Support/Surge directory."
-#endif
-#if WINDOWS
-            << "%ProgramData%\\Surge directory."
-#endif
-#if LINUX
-            << "/usr/share/Surge or ~/.local/share/Surge."
-#endif
-            << " Please reinstall Surge and try again!";
-        Surge::UserInteractions::promptError(oss.str(), "Surge Resources Loading Error");
+        oss << "Unable to load 'windows.wt'. from memory. "
+            << "This is a usually fatal internal software error in Surge XT which should"
+            << " never occur!";
+        reportError(oss.str(), "Surge Resources Loading Error");
     }
 
     // Tunings Library Support
@@ -499,11 +536,14 @@ bailOnPortable:
     // Load the XML DocStrings if we are loading startup data
     if (loadWtAndPatch)
     {
-        auto dsf = string_to_path(datapath + "paramdocumentation.xml");
+        auto pdData = std::string(SurgeCoreBinary::paramdocumentation_xml,
+                                  SurgeCoreBinary::paramdocumentation_xmlSize) +
+                      "\n";
+
         TiXmlDocument doc;
-        if (!doc.LoadFile(dsf) || doc.Error())
+        if (!doc.Parse(pdData.c_str()) || doc.Error())
         {
-            std::cout << "Unable to load  '" << dsf << "'!" << std::endl;
+            std::cout << "Unable to load  'paramdocumentation'!" << std::endl;
             std::cout << "Unable to parse!\nError is:\n"
                       << doc.ErrorDesc() << " at row " << doc.ErrorRow() << ", column "
                       << doc.ErrorCol() << std::endl;
@@ -513,7 +553,7 @@ bailOnPortable:
             TiXmlElement *pdoc = TINYXML_SAFE_TO_ELEMENT(doc.FirstChild("param-doc"));
             if (!pdoc)
             {
-                Surge::UserInteractions::promptError(
+                reportError(
                     "Unknown top element in paramdocumentation.xml - not a parameter documentation "
                     "XML file!",
                     "Error");
@@ -587,14 +627,14 @@ bailOnPortable:
     }
 
     monoPedalMode = (MonoPedalMode)Surge::Storage::getUserDefaultValue(
-        this, "monoPedalMode", MonoPedalMode::HOLD_ALL_NOTES);
+        this, Surge::Storage::MonoPedalMode, MonoPedalMode::HOLD_ALL_NOTES);
 
     for (int s = 0; s < n_scenes; ++s)
     {
         getPatch().scene[s].drift.extend_range = true;
     }
 
-    bool mtsMode = Surge::Storage::getUserDefaultValue(this, "useODDMTS", false);
+    bool mtsMode = Surge::Storage::getUserDefaultValue(this, Surge::Storage::UseODDMTS, false);
     if (mtsMode)
     {
         initialize_oddsound();
@@ -603,6 +643,20 @@ bailOnPortable:
     {
         oddsound_mts_client = nullptr;
         oddsound_mts_active = false;
+    }
+
+    initPatchName =
+        Surge::Storage::getUserDefaultValue(this, Surge::Storage::InitialPatchName, "Init Saw");
+    initPatchCategory = Surge::Storage::getUserDefaultValue(
+        this, Surge::Storage::InitialPatchCategory, "Templates");
+}
+
+void SurgeStorage::initializePatchDb()
+{
+    patchDB = std::make_unique<Surge::PatchStorage::PatchDB>(this);
+    for (auto p : patch_list)
+    {
+        patchDB->considerFXPForLoad(p.path, p.name, patch_category[p.category].name);
     }
 }
 
@@ -753,7 +807,7 @@ void SurgeStorage::refreshPatchOrWTListAddDir(bool userDir, string subdir,
     {
         std::ostringstream oss;
         oss << "Experienced file system error when building patches. " << e.what();
-        Surge::UserInteractions::promptError(oss.str(), "FileSystem Error");
+        reportError(oss.str(), "FileSystem Error");
     }
 
     /*
@@ -847,7 +901,7 @@ void SurgeStorage::refresh_wtlist()
         std::ostringstream ss;
         ss << "Surge was unable to load wavetables from '" << datapath
            << "'. Please reinstall Surge!";
-        Surge::UserInteractions::promptError(ss.str(), "Surge Installation Error");
+        reportError(ss.str(), "Surge Installation Error");
     }
 
     firstThirdPartyWTCategory = wt_category.size();
@@ -1006,7 +1060,7 @@ void SurgeStorage::load_wt(string filename, Wavetable *wt, OscillatorStorage *os
         std::ostringstream oss;
         oss << "Unable to load file with extension " << extension
             << "! Surge only supports .wav and .wt wavetable files!";
-        Surge::UserInteractions::promptError(oss.str(), "Error");
+        reportError(oss.str(), "Error");
     }
 
     if (osc && loaded)
@@ -1067,10 +1121,64 @@ bool SurgeStorage::load_wt_wt(string filename, Wavetable *wt)
             << " If you would like, please attach the wavetable which caused this message to a new "
                "GitHub issue at "
             << " https://github.com/surge-synthesizer/surge/";
-        Surge::UserInteractions::promptError(oss.str(), "Wavetable Loading Error");
+        reportError(oss.str(), "Wavetable Loading Error");
     }
     return wasBuilt;
 }
+
+bool SurgeStorage::load_wt_wt_mem(const char *data, size_t dataSize, Wavetable *wt)
+{
+    wt_header wh;
+    if (dataSize < sizeof(wt_header))
+        return false;
+
+    memcpy(&wh, data, sizeof(wt_header));
+
+    // I'm not sure why this ever worked but it is checking the 4 bytes against vawt so...
+    // if (wh.tag != vt_read_int32BE('vawt'))
+    if (!(wh.tag[0] == 'v' && wh.tag[1] == 'a' && wh.tag[2] == 'w' && wh.tag[3] == 't'))
+    {
+        // SOME sort of error reporting is appropriate
+        return false;
+    }
+
+    size_t ds;
+    if (vt_read_int16LE(wh.flags) & wtf_int16)
+        ds = sizeof(short) * vt_read_int16LE(wh.n_tables) * vt_read_int32LE(wh.n_samples);
+    else
+        ds = sizeof(float) * vt_read_int16LE(wh.n_tables) * vt_read_int32LE(wh.n_samples);
+
+    if (dataSize < ds + sizeof(wt_header))
+    {
+        std::cout << "Data size " << dataSize << " < " << ds << " + " << sizeof(wt_header)
+                  << std::endl;
+        return false;
+    }
+
+    const char *wtData = data + sizeof(wt_header);
+    waveTableDataMutex.lock();
+    bool wasBuilt = wt->BuildWT((void *)wtData, wh, false);
+    waveTableDataMutex.unlock();
+
+    if (!wasBuilt)
+    {
+        std::ostringstream oss;
+        oss << "Wavetable could not be built, which means it has too many samples or frames."
+            << " You provided " << wh.n_tables << " frames of " << wh.n_samples
+            << "samples, while limit is " << max_subtables << " frames and " << max_wtable_size
+            << " samples."
+            << " In some cases, Surge detects this situation inconsistently. Surge is now in a "
+               "potentially "
+            << " inconsistent state. It is recommended to restart Surge and not load the "
+               "problematic wavetable again."
+            << " If you would like, please attach the wavetable which caused this message to a new "
+               "GitHub issue at "
+            << " https://github.com/surge-synthesizer/surge/";
+        reportError(oss.str(), "Wavetable Loading Error");
+    }
+    return wasBuilt;
+}
+
 int SurgeStorage::get_clipboard_type() { return clipboard_type; }
 
 int SurgeStorage::getAdjacentWaveTable(int id, bool nextPrev)
@@ -1136,6 +1244,8 @@ void SurgeStorage::clipboard_copy(int type, int scene, int entry)
                    sizeof(StepSequencerStorage));
         if (getPatch().scene[scene].lfo[entry].shape.val.i == lt_mseg)
             clipboard_msegs[0] = getPatch().msegs[scene][entry];
+        if (getPatch().scene[scene].lfo[entry].shape.val.i == lt_formula)
+            clipboard_formulae[0] = getPatch().formulamods[scene][entry];
         break;
     case cp_scene:
     {
@@ -1147,6 +1257,7 @@ void SurgeStorage::clipboard_copy(int type, int scene, int entry)
             memcpy(&clipboard_stepsequences[i], &getPatch().stepsequences[scene][i],
                    sizeof(StepSequencerStorage));
             clipboard_msegs[i] = getPatch().msegs[scene][i];
+            clipboard_formulae[i] = getPatch().formulamods[scene][i];
         }
         for (int i = 0; i < n_oscs; i++)
         {
@@ -1259,6 +1370,7 @@ void SurgeStorage::clipboard_paste(int type, int scene, int entry)
             memcpy(&getPatch().stepsequences[scene][i], &clipboard_stepsequences[i],
                    sizeof(StepSequencerStorage));
             getPatch().msegs[scene][i] = clipboard_msegs[i];
+            getPatch().formulamods[scene][i] = clipboard_formulae[i];
         }
 
         for (int i = 0; i < n_oscs; i++)
@@ -1335,6 +1447,8 @@ void SurgeStorage::clipboard_paste(int type, int scene, int entry)
                        sizeof(StepSequencerStorage));
             if (getPatch().scene[scene].lfo[entry].shape.val.i == lt_mseg)
                 getPatch().msegs[scene][entry] = clipboard_msegs[0];
+            if (getPatch().scene[scene].lfo[entry].shape.val.i == lt_formula)
+                getPatch().formulamods[scene][entry] = clipboard_formulae[0];
 
             break;
         case cp_scene:
@@ -1580,10 +1694,7 @@ float SurgeStorage::note_to_pitch(float x)
         int e = (int)x;
         float a = x - (float)e;
 
-        if (e > 0x1fe)
-            e = 0x1fe;
-
-        return (1 - a) * table_pitch[e & 0x1ff] + a * table_pitch[(e + 1) & 0x1ff];
+        return (1 - a) * table_pitch[e] + a * table_pitch[(e + 1) & 0x1ff];
     }
 }
 
@@ -1596,14 +1707,10 @@ float SurgeStorage::note_to_pitch_inv(float x)
     else
     {
         x = limit_range(x + 256, 0.f, tuning_table_size - (float)1.e-4);
-        // x += 256;
         int e = (int)x;
         float a = x - (float)e;
 
-        if (e > 0x1fe)
-            e = 0x1fe;
-
-        return (1 - a) * table_pitch_inv[e & 0x1ff] + a * table_pitch_inv[(e + 1) & 0x1ff];
+        return (1 - a) * table_pitch_inv[e] + a * table_pitch_inv[(e + 1) & 0x1ff];
     }
 }
 
@@ -1614,33 +1721,26 @@ float SurgeStorage::note_to_pitch_ignoring_tuning(float x)
     int e = (int)x;
     float a = x - (float)e;
 
-    if (e > 0x1fe)
-        e = 0x1fe;
-
     float pow2pos = a * 1000.0;
     int pow2idx = (int)pow2pos;
     float pow2frac = pow2pos - pow2idx;
     float pow2v =
         (1 - pow2frac) * table_two_to_the[pow2idx] + pow2frac * table_two_to_the[pow2idx + 1];
-    return table_pitch_ignoring_tuning[e & 0x1ff] * pow2v;
+    return table_pitch_ignoring_tuning[e] * pow2v;
 }
 
 float SurgeStorage::note_to_pitch_inv_ignoring_tuning(float x)
 {
     x = limit_range(x + 256, 0.f, tuning_table_size - (float)1.e-4);
-    // x += 256;
     int e = (int)x;
     float a = x - (float)e;
-
-    if (e > 0x1fe)
-        e = 0x1fe;
 
     float pow2pos = a * 1000.0;
     int pow2idx = (int)pow2pos;
     float pow2frac = pow2pos - pow2idx;
     float pow2v = (1 - pow2frac) * table_two_to_the_minus[pow2idx] +
                   pow2frac * table_two_to_the_minus[pow2idx + 1];
-    return table_pitch_inv_ignoring_tuning[e & 0x1ff] * pow2v;
+    return table_pitch_inv_ignoring_tuning[e] * pow2v;
 }
 
 void SurgeStorage::note_to_omega(float x, float &sinu, float &cosi)
@@ -1650,13 +1750,8 @@ void SurgeStorage::note_to_omega(float x, float &sinu, float &cosi)
     int e = (int)x;
     float a = x - (float)e;
 
-    if (e > 0x1fe)
-        e = 0x1fe;
-    else if (e < 0)
-        e = 0;
-
-    sinu = (1 - a) * table_note_omega[0][e & 0x1ff] + a * table_note_omega[0][(e + 1) & 0x1ff];
-    cosi = (1 - a) * table_note_omega[1][e & 0x1ff] + a * table_note_omega[1][(e + 1) & 0x1ff];
+    sinu = (1 - a) * table_note_omega[0][e] + a * table_note_omega[0][(e + 1) & 0x1ff];
+    cosi = (1 - a) * table_note_omega[1][e] + a * table_note_omega[1][(e + 1) & 0x1ff];
 }
 
 void SurgeStorage::note_to_omega_ignoring_tuning(float x, float &sinu, float &cosi)
@@ -1666,14 +1761,9 @@ void SurgeStorage::note_to_omega_ignoring_tuning(float x, float &sinu, float &co
     int e = (int)x;
     float a = x - (float)e;
 
-    if (e > 0x1fe)
-        e = 0x1fe;
-    else if (e < 0)
-        e = 0;
-
-    sinu = (1 - a) * table_note_omega_ignoring_tuning[0][e & 0x1ff] +
+    sinu = (1 - a) * table_note_omega_ignoring_tuning[0][e] +
            a * table_note_omega_ignoring_tuning[0][(e + 1) & 0x1ff];
-    cosi = (1 - a) * table_note_omega_ignoring_tuning[1][e & 0x1ff] +
+    cosi = (1 - a) * table_note_omega_ignoring_tuning[1][e] +
            a * table_note_omega_ignoring_tuning[1][(e + 1) & 0x1ff];
 }
 
@@ -1829,7 +1919,7 @@ void SurgeStorage::rescanUserMidiMappings()
     {
         std::ostringstream oss;
         oss << "Experienced file system error when loading MIDI settings. " << e.what();
-        Surge::UserInteractions::promptError(oss.str(), "FileSystem Error");
+        reportError(oss.str(), "FileSystem Error");
     }
 }
 
@@ -1847,8 +1937,8 @@ void SurgeStorage::loadMidiMappingByName(std::string name)
     if (!sm)
     {
         // Invalid XML Document. Show an error?
-        Surge::UserInteractions::promptError(
-            "Unable to locate surge-midi element in XML. Not a valid MIDI mapping!", "Surge MIDI");
+        reportError("Unable to locate surge-midi element in XML. Not a valid MIDI mapping!",
+                    "Surge MIDI");
         return;
     }
 
@@ -1940,7 +2030,7 @@ void SurgeStorage::storeMidiMappingToName(std::string name)
     {
         std::ostringstream oss;
         oss << "Unable to save MIDI settings to '" << fn << "'!";
-        Surge::UserInteractions::promptError(oss.str(), "Error");
+        reportError(oss.str(), "Error");
     }
 }
 
@@ -1992,6 +2082,19 @@ void SurgeStorage::toggleTuningToCache()
         retuneTo12TETScaleC261Mapping();
         isToggledToCache = true;
     }
+}
+
+void SurgeStorage::reportError(const std::string &msg, const std::string &title)
+{
+    std::cout << "Surge Error [" << title << "]\n" << msg << std::endl;
+    if (errorListeners.empty())
+    {
+        std::lock_guard<std::mutex> g(preListenerErrorMutex);
+        preListenerErrors.emplace_back(msg, title);
+    }
+
+    for (auto l : errorListeners)
+        l->onSurgeError(msg, title);
 }
 
 namespace Surge

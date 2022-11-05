@@ -14,8 +14,9 @@
 */
 
 #include "SurgeSynthesizer.h"
-#include "DspUtilities.h"
+#include "DSPUtils.h"
 #include <ctime>
+#include "CPUFeatures.h"
 #if MAC || LINUX
 #include <pthread.h>
 #else
@@ -23,37 +24,11 @@
 #include <process.h>
 #endif
 
-#if TARGET_AUDIOUNIT
-#include "aulayer.h"
-#elif TARGET_VST3
-#include "SurgeVst3Processor.h"
-#include "vstgui/plugin-bindings/plugguieditor.h"
-#elif TARGET_LV2
-#include "SurgeLv2Wrapper.h"
-#include "vstgui/plugin-bindings/plugguieditor.h"
-#elif TARGET_APP
-#include "PluginLayer.h"
-#include "vstgui/plugin-bindings/plugguieditor.h"
-#elif TARGET_JUCE
-#include "JUCEPluginLayerProxy.h"
-#elif TARGET_JUCE_UI
-#include "SurgeSynthProcessor.h"
-#elif TARGET_HEADLESS
-#include "HeadlessPluginLayerProxy.h"
-#else
-#include "Vst2PluginInstance.h"
-
-#if LINUX
-#include "../linux/linux-aeffguieditor.h"
-#else
-#include "vstgui/plugin-bindings/aeffguieditor.h"
-#endif
-#endif
 #include "SurgeParamConfig.h"
 
 #include "UserDefaults.h"
 #include "filesystem/import.h"
-#include "effect/Effect.h"
+#include "Effect.h"
 
 #include <thread>
 #include "libMTSClient.h"
@@ -61,7 +36,6 @@
 using namespace std;
 
 SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedDataPath)
-    //: halfband_AL(false),halfband_AR(false),halfband_BL(false),halfband_BR(false),
     : storage(suppliedDataPath), hpA(&storage), hpB(&storage), _parent(parent), halfbandA(6, true),
       halfbandB(6, true), halfbandIN(6, true)
 {
@@ -106,8 +80,7 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedData
 
     for (int sc = 0; sc < n_scenes; sc++)
     {
-        FBQ[sc] = (QuadFilterChainState *)_aligned_malloc(
-            (MAX_VOICES >> 2) * sizeof(QuadFilterChainState), 16);
+        FBQ[sc] = new QuadFilterChainState[MAX_VOICES >> 2]();
 
         for (int i = 0; i < (MAX_VOICES >> 2); ++i)
         {
@@ -119,10 +92,11 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedData
 
     storage.smoothingMode =
         (ControllerModulationSource::SmoothingMode)(int)Surge::Storage::getUserDefaultValue(
-            &storage, "smoothingMode", (int)(ControllerModulationSource::SmoothingMode::LEGACY));
+            &storage, Surge::Storage::SmoothingMode,
+            (int)(ControllerModulationSource::SmoothingMode::LEGACY));
     storage.pitchSmoothingMode =
         (ControllerModulationSource::SmoothingMode)(int)Surge::Storage::getUserDefaultValue(
-            &storage, "pitchSmoothingMode",
+            &storage, Surge::Storage::PitchSmoothingMode,
             (int)(ControllerModulationSource::SmoothingMode::DIRECT));
 
     patch.polylimit.val.i = DEFAULT_POLYLIMIT;
@@ -170,8 +144,8 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedData
 
         for (int l = 0; l < n_lfos_scene; l++)
         {
-            scene.modsources[ms_slfo1 + l] = new LfoModulationSource();
-            ((LfoModulationSource *)scene.modsources[ms_slfo1 + l])
+            scene.modsources[ms_slfo1 + l] = new LFOModulationSource();
+            ((LFOModulationSource *)scene.modsources[ms_slfo1 + l])
                 ->assign(&storage, &scene.lfo[n_lfos_voice + l], storage.getPatch().scenedata[sc],
                          0, &patch.stepsequences[sc][n_lfos_voice + l],
                          &patch.msegs[sc][n_lfos_voice + l],
@@ -249,27 +223,23 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, std::string suppliedData
     mpeEnabled = false;
     mpeVoices = 0;
     storage.mpePitchBendRange =
-        (float)Surge::Storage::getUserDefaultValue(&storage, "mpePitchBendRange", 48);
+        (float)Surge::Storage::getUserDefaultValue(&storage, Surge::Storage::MPEPitchBendRange, 48);
     mpeGlobalPitchBendRange = 0;
 
-#if TARGET_VST3 || TARGET_VST2 || TARGET_AUDIOUNIT
-    // If we are in a DAW hosted environment, choose a preset from the preset library
-    // Skip LV2 until we sort out the patch change dynamics there
     int pid = 0;
     for (auto p : storage.patch_list)
     {
-        if (p.name == "Init Saw" && storage.patch_category[p.category].name == "Init")
+        if (p.name == storage.initPatchName &&
+            storage.patch_category[p.category].name == storage.initPatchCategory)
         {
-            // patchid_queue = pid;
-            // This is the wrong thing to do. I *think* what we need to do here is to
-            // explicitly load the file directly inline on thread using loadPatchFromFile
-            // and set up the location int rather than defer the load. But do that
-            // later
+            patchid_queue = pid;
             break;
         }
         pid++;
     }
-#endif
+    if (patchid_queue >= 0)
+        processThreadunsafeOperations(true); // DANGER MODE IS ON
+    patchid_queue = -1;
 }
 
 SurgeSynthesizer::~SurgeSynthesizer()
@@ -278,7 +248,7 @@ SurgeSynthesizer::~SurgeSynthesizer()
 
     for (int sc = 0; sc < n_scenes; sc++)
     {
-        _aligned_free(FBQ[sc]);
+        delete[] FBQ[sc];
     }
 
     for (int sc = 0; sc < n_scenes; sc++)
@@ -1387,17 +1357,7 @@ void SurgeSynthesizer::sendParameterAutomation(long index, float value)
     if (!fromSynthSideId(index, eid))
         return;
 
-#if TARGET_AUDIOUNIT
-    getParent()->ParameterUpdate(eid.getDawSideIndex());
-#elif TARGET_VST3
-    getParent()->setParameterAutomated(index, value);
-#elif TARGET_JUCE_UI
     getParent()->surgeParameterUpdated(eid, value);
-#elif TARGET_HEADLESS || TARGET_APP
-        // NO OP
-#else
-    getParent()->setParameterAutomated(eid.getDawSideIndex(), value);
-#endif
 }
 
 void SurgeSynthesizer::onRPN(int channel, int lsbRPN, int msbRPN, int lsbValue, int msbValue)
@@ -1449,8 +1409,8 @@ void SurgeSynthesizer::onRPN(int channel, int lsbRPN, int msbRPN, int lsbValue, 
         mpeEnabled = msbValue > 0;
         mpeVoices = msbValue & 0xF;
         if (storage.mpePitchBendRange < 0.0f)
-            storage.mpePitchBendRange =
-                Surge::Storage::getUserDefaultValue(&storage, "mpePitchBendRange", 48);
+            storage.mpePitchBendRange = Surge::Storage::getUserDefaultValue(
+                &storage, Surge::Storage::MPEPitchBendRange, 48);
         mpeGlobalPitchBendRange = 0;
         return;
     }
@@ -1762,7 +1722,6 @@ void SurgeSynthesizer::allNotesOff()
         list<SurgeVoice *>::const_iterator iter;
         for (iter = voices[s].begin(); iter != voices[s].end(); iter++)
         {
-            //_aligned_free(*iter);
             freeVoice(*iter);
         }
         voices[s].clear();
@@ -2376,18 +2335,6 @@ bool SurgeSynthesizer::loadOscalgos()
                 }
                 storage.getPatch().scene[s].osc[i].queue_xmldata = 0;
             }
-            if (resend)
-            {
-#if TARGET_LV2
-                auto tp = &(storage.getPatch().scene[s].osc[i].type);
-                sendParameterAutomation(tp->id, getParameter01(tp->id));
-                for (int k = 0; k < n_osc_params; k++)
-                {
-                    auto pp = &(storage.getPatch().scene[s].osc[i].p[k]);
-                    sendParameterAutomation(pp->id, getParameter01(pp->id));
-                }
-#endif
-            }
         }
     }
     return true;
@@ -2426,7 +2373,7 @@ bool SurgeSynthesizer::isValidModulation(long ptag, modsources modsource)
 ModulationRouting *SurgeSynthesizer::getModRouting(long ptag, modsources modsource)
 {
     if (!isValidModulation(ptag, modsource))
-        return 0;
+        return nullptr;
 
     int scene = storage.getPatch().param_ptr[ptag]->scene;
     vector<ModulationRouting> *modlist = nullptr;
@@ -2456,7 +2403,7 @@ ModulationRouting *SurgeSynthesizer::getModRouting(long ptag, modsources modsour
         }
     }
 
-    return 0;
+    return nullptr;
 }
 
 float SurgeSynthesizer::getModDepth(long ptag, modsources modsource)
@@ -2654,6 +2601,28 @@ float SurgeSynthesizer::getModulation(long ptag, modsources modsource)
     return storage.getPatch().param_ptr[ptag]->get_modulation_f01(0);
 }
 
+bool SurgeSynthesizer::isModulationMuted(long ptag, modsources modsource)
+{
+    if (!isValidModulation(ptag, modsource))
+        return false;
+
+    ModulationRouting *r = getModRouting(ptag, modsource);
+    if (r)
+        return r->muted;
+
+    return false;
+}
+
+void SurgeSynthesizer::muteModulation(long ptag, modsources modsource, bool mute)
+{
+    if (!isValidModulation(ptag, modsource))
+        return;
+
+    ModulationRouting *r = getModRouting(ptag, modsource);
+    if (r)
+        r->muted = mute;
+}
+
 void SurgeSynthesizer::clear_osc_modulation(int scene, int entry)
 {
     storage.modRoutingMutex.lock();
@@ -2773,6 +2742,7 @@ bool SurgeSynthesizer::setModulation(long ptag, modsources modsource, float val)
             t.depth = value;
             t.source_id = modsource;
             t.destination_id = id;
+            t.muted = false;
             modlist->push_back(t);
         }
         else
@@ -2784,26 +2754,6 @@ bool SurgeSynthesizer::setModulation(long ptag, modsources modsource, float val)
 
     return true;
 }
-
-#if 0
-int SurgeSynthesizer::remapExternalApiToInternalId(unsigned int x)
-{
-   if (x < n_customcontrollers)
-      return metaparam_offset + x;
-   else if (x >= n_total_params)
-      return x - n_total_params;
-   return x;
-}
-
-int SurgeSynthesizer::remapInternalToExternalApiId(unsigned int x)
-{
-   if (x >= metaparam_offset)
-      return (x - metaparam_offset);
-   else if (x < n_customcontrollers)
-      return x + n_total_params;
-   return x;
-}
-#endif
 
 float SurgeSynthesizer::getParameter01(long index)
 {
@@ -3133,26 +3083,20 @@ DWORD WINAPI loadPatchInBackgroundThread(LPVOID lpParam)
             synth->loadPatchByPath(synth->patchid_file, -1, s.c_str());
         }
     }
-#if TARGET_LV2
-    synth->getParent()->patchChanged();
-#endif
 
     synth->halt_engine = false;
 
     return 0;
 }
 
-void SurgeSynthesizer::processThreadunsafeOperations()
+void SurgeSynthesizer::processThreadunsafeOperations(bool dangerMode)
 {
-    if (!audio_processing_active)
+    if (!audio_processing_active || dangerMode)
     {
         // if the audio processing is inactive, patchloading should occur anyway
         if (patchid_queue >= 0)
         {
             loadPatch(patchid_queue);
-#if TARGET_LV2
-            getParent()->patchChanged();
-#endif
             patchid_queue = -1;
         }
 
@@ -3292,7 +3236,8 @@ void SurgeSynthesizer::processControl()
                     int dst_id = storage.getPatch().scene[s].modulation_scene[i].destination_id;
                     float depth = storage.getPatch().scene[s].modulation_scene[i].depth;
                     storage.getPatch().scenedata[s][dst_id].f +=
-                        depth * storage.getPatch().scene[s].modsources[src_id]->output;
+                        depth * storage.getPatch().scene[s].modsources[src_id]->output *
+                        (1.0 - storage.getPatch().scene[s].modulation_scene[i].muted);
                 }
             }
 
@@ -3310,7 +3255,8 @@ void SurgeSynthesizer::processControl()
         int dst_id = storage.getPatch().modulation_global[i].destination_id;
         float depth = storage.getPatch().modulation_global[i].depth;
         storage.getPatch().globaldata[dst_id].f +=
-            depth * storage.getPatch().scene[0].modsources[src_id]->output;
+            depth * storage.getPatch().scene[0].modsources[src_id]->output *
+            (1 - storage.getPatch().modulation_global[i].muted);
     }
 
     if (switch_toggled_queued)
@@ -3514,7 +3460,6 @@ void SurgeSynthesizer::process()
 
             if (!resume)
             {
-                //_aligned_free(v);
                 freeVoice(v);
                 iter = voices[s].erase(iter);
             }
@@ -3782,7 +3727,7 @@ void SurgeSynthesizer::process()
     }
 }
 
-PluginLayer *SurgeSynthesizer::getParent()
+SurgeSynthesizer::PluginLayer *SurgeSynthesizer::getParent()
 {
     assert(_parent != nullptr);
     return _parent;
@@ -3853,7 +3798,7 @@ void SurgeSynthesizer::loadFromDawExtraState()
         }
         catch (Tunings::TuningError &e)
         {
-            Surge::UserInteractions::promptError(e.what(), "Unable to restore tuning!");
+            storage.reportError(e.what(), "Unable to restore tuning!");
             storage.retuneTo12TETScale();
         }
     }
@@ -3879,7 +3824,7 @@ void SurgeSynthesizer::loadFromDawExtraState()
         }
         catch (Tunings::TuningError &e)
         {
-            Surge::UserInteractions::promptError(e.what(), "Unable to restore mapping!");
+            storage.reportError(e.what(), "Unable to restore mapping!");
             storage.remapToConcertCKeyboard();
         }
     }
@@ -3919,17 +3864,17 @@ void SurgeSynthesizer::setupActivateExtraOutputs()
     if (hostProgram.find("Fruit") == 0) // FruityLoops default off
         defval = false;
 
-    activateExtraOutputs =
-        Surge::Storage::getUserDefaultValue(&(storage), "activateExtraOutputs", defval ? 1 : 0);
+    activateExtraOutputs = Surge::Storage::getUserDefaultValue(
+        &(storage), Surge::Storage::ActivateExtraOutputs, defval ? 1 : 0);
 }
 
 void SurgeSynthesizer::swapMetaControllers(int c1, int c2)
 {
-    char nt[20];
-    strxcpy(nt, storage.getPatch().CustomControllerLabel[c1], 16);
+    char nt[CUSTOM_CONTROLLER_LABEL_SIZE + 4];
+    strxcpy(nt, storage.getPatch().CustomControllerLabel[c1], CUSTOM_CONTROLLER_LABEL_SIZE);
     strxcpy(storage.getPatch().CustomControllerLabel[c1],
-            storage.getPatch().CustomControllerLabel[c2], 16);
-    strxcpy(storage.getPatch().CustomControllerLabel[c2], nt, 16);
+            storage.getPatch().CustomControllerLabel[c2], CUSTOM_CONTROLLER_LABEL_SIZE);
+    strxcpy(storage.getPatch().CustomControllerLabel[c2], nt, CUSTOM_CONTROLLER_LABEL_SIZE);
 
     storage.modRoutingMutex.lock();
 

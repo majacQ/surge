@@ -1,8 +1,8 @@
 #pragma once
 
 #include "SurgeStorage.h"
-#include "DspUtilities.h"
-#include <vt_dsp/lipol.h>
+#include "DSPUtils.h"
+#include <vembertech/lipol.h>
 #include "BiquadFilter.h"
 
 #include "OscillatorBase.h"

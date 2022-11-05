@@ -16,14 +16,14 @@
 #include "SurgeStorage.h"
 #include "Oscillator.h"
 #include "SurgeParamConfig.h"
-#include "effect/Effect.h"
+#include "Effect.h"
 #include <list>
-#include <vt_dsp/vt_dsp_endian.h>
+#include <vembertech/vt_dsp_endian.h>
 #include "MSEGModulationHelper.h"
+#include "FormulaModulationHelper.h"
 #include "DebugHelpers.h"
 #include "StringOps.h"
 #include "SkinModel.h"
-#include "UserInteractions.h"
 #include "UserDefaults.h"
 #include "version.h"
 
@@ -44,7 +44,6 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
             p_id.next(), 0, "volume_FX2", "Send FX 2 Return", ct_amplitude,
             Surge::Skin::Global::fx2_return, 0, cg_GLOBAL, 0, true,
             Surge::ParamConfig::kHorizontal));
-        // TODO don't store in the patch ?
         param_ptr.push_back(volume.assign(p_id.next(), 0, "volume", "Global Volume",
                                           ct_decibel_attenuation_clipper,
                                           Surge::Skin::Global::master_volume, 0, cg_GLOBAL, 0, true,
@@ -66,7 +65,6 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
     param_ptr.push_back(fx_disable.assign(p_id.next(), 0, "fx_disable", "FX Disable", ct_none,
                                           Surge::Skin::Global::fx_disable, 0, cg_GLOBAL, 0, false));
 
-    // shouldnt't be stored in the patch
     param_ptr.push_back(polylimit.assign(p_id.next(), 0, "polylimit", "Polyphony Limit",
                                          ct_polylimit, Surge::Skin::Scene::polylimit, 0, cg_GLOBAL,
                                          0, false, Surge::ParamConfig::kHorizontal | kNoPopup));
@@ -128,6 +126,9 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
         {
             // Initialize the display name here
             scene[sc].osc[osc].wavetable_display_name[0] = '\0';
+            scene[sc].osc[osc].wavetable_formula = "";
+            scene[sc].osc[osc].wavetable_formula_nframes = 10;
+            scene[sc].osc[osc].wavetable_formula_res_base = 5;
 
             a->push_back(scene[sc].osc[osc].type.assign(p_id.next(), id_s++, "type", "Type",
                                                         ct_osctype, Surge::Skin::Osc::osc_type,
@@ -283,10 +284,10 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
             p_id.next(), id_s++, "vca_velsense", "Velocity > VCA Gain", ct_decibel_attenuation,
             Surge::Skin::Scene::vel_sensitivity, sc_id, cg_GLOBAL, 0, false));
 
-        a->push_back(scene[sc].feedback.assign(p_id.next(), id_s++, "feedback", "Feedback",
-                                               ct_percent_bipolar, Surge::Skin::Filter::feedback,
-                                               sc_id, cg_GLOBAL, 0, true,
-                                               Surge::ParamConfig::kHorizontal | kWhite | sceasy));
+        a->push_back(scene[sc].feedback.assign(
+            p_id.next(), id_s++, "feedback", "Feedback", ct_osc_feedback_negative,
+            Surge::Skin::Filter::feedback, sc_id, cg_GLOBAL, 0, true,
+            Surge::ParamConfig::kHorizontal | kWhite | sceasy));
         a->push_back(scene[sc].filterblock_configuration.assign(
             p_id.next(), id_s++, "fb_config", "Filter Configuration", ct_fbconfig,
             Surge::Skin::Filter::config, sc_id, cg_GLOBAL, 0, false));
@@ -525,8 +526,7 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
         {
             auto cge = p->ctrlgroup_entry - ms_lfo1;
             auto lf = &(p->storage->getPatch().scene[p->scene - 1].lfo[cge]);
-            // TODO: remove lt_function after implementing function modulator!
-            auto res = lf->shape.val.i == lt_envelope || lf->shape.val.i == lt_function;
+            auto res = lf->shape.val.i == lt_envelope;
             if (!res && p->can_deactivate())
                 return p->deactivated;
             return res;
@@ -1109,7 +1109,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
             << ". Features of the patch will not be available in your "
             << "session. You can always find the latest Surge at "
                "https://surge-synthesizer.github.io/";
-        Surge::UserInteractions::promptError(oss.str(), "Surge Patch Version Mismatch");
+        storage->reportError(oss.str(), "Surge Patch Version Mismatch");
     }
 
     TiXmlElement *meta = TINYXML_SAFE_TO_ELEMENT(patch->FirstChild("meta"));
@@ -1141,10 +1141,14 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
     // delete volume & fx_bypass if it's a preset. Those settings should stick
     if (is_preset)
     {
-        TiXmlElement *tp = TINYXML_SAFE_TO_ELEMENT(parameters->FirstChild("volume"));
-        if (tp)
-            parameters->RemoveChild(tp);
-        tp = TINYXML_SAFE_TO_ELEMENT(parameters->FirstChild("fx_bypass"));
+        if (revision < 17)
+        {
+            TiXmlElement *tp = TINYXML_SAFE_TO_ELEMENT(parameters->FirstChild("volume"));
+            if (tp)
+                parameters->RemoveChild(tp);
+        }
+
+        auto tp = TINYXML_SAFE_TO_ELEMENT(parameters->FirstChild("fx_bypass"));
         if (tp)
             parameters->RemoveChild(tp);
 
@@ -1362,6 +1366,12 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                     ModulationRouting t;
                     t.depth = (float)depth;
                     t.source_id = modsource;
+
+                    int muted = 0;
+                    if (mr->QueryIntAttribute("muted", &muted) == TIXML_SUCCESS)
+                        t.muted = muted;
+                    else
+                        t.muted = false;
 
                     if (sceneId != 0)
                         t.destination_id = paramIdInScene;
@@ -1708,6 +1718,9 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
         for (int osc = 0; osc < n_oscs; osc++)
         {
             scene[sc].osc[osc].wavetable_display_name[0] = '\0';
+            scene[sc].osc[osc].wavetable_formula = "";
+            scene[sc].osc[osc].wavetable_formula_nframes = 10;
+            scene[sc].osc[osc].wavetable_formula_res_base = 5;
         }
     }
 
@@ -1726,6 +1739,18 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                 {
                     strxcpy(scene[ssc].osc[sos].wavetable_display_name,
                             lkid->Attribute("wavetable_display_name"), WAVETABLE_DISPLAY_NAME_SIZE);
+                }
+
+                if (lkid->Attribute("wavetable_formula"))
+                {
+                    scene[ssc].osc[sos].wavetable_formula =
+                        base64_decode(lkid->Attribute("wavetable_formula"));
+                    int wfi;
+                    if (lkid->QueryIntAttribute("wavetable_formula_nframes", &wfi) == TIXML_SUCCESS)
+                        scene[ssc].osc[sos].wavetable_formula_nframes = wfi;
+                    if (lkid->QueryIntAttribute("wavetable_formula_res_base", &wfi) ==
+                        TIXML_SUCCESS)
+                        scene[ssc].osc[sos].wavetable_formula_res_base = wfi;
                 }
 
                 auto ec = &(scene[ssc].osc[sos].extraConfig);
@@ -1782,8 +1807,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
     }
 
     // restore msegs. We optionally don't restore the snap from patch
-    bool userPrefRestoreMSEGFromPatch =
-        Surge::Storage::getUserDefaultValue(storage, "restoreMSEGSnapFromPatch", true);
+    bool userPrefRestoreMSEGFromPatch = Surge::Storage::getUserDefaultValue(
+        storage, Surge::Storage::RestoreMSEGSnapFromPatch, true);
     for (int s = 0; s < n_scenes; ++s)
         for (int m = 0; m < n_lfos; ++m)
         {
@@ -1797,6 +1822,9 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                 Surge::MSEG::createInitVoiceMSEG(ms);
             }
             Surge::MSEG::rebuildCache(ms);
+
+            auto *fs = &(formulamods[s][m]);
+            Surge::Formula::createInitFormula(fs);
         }
 
     TiXmlElement *ms = TINYXML_SAFE_TO_ELEMENT(patch->FirstChild("msegs"));
@@ -1835,6 +1863,28 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                 }
             }
         }
+    }
+
+    // Unstream formula mods
+    TiXmlElement *fs = TINYXML_SAFE_TO_ELEMENT(patch->FirstChild("formulae"));
+    if (fs)
+        p = TINYXML_SAFE_TO_ELEMENT(fs->FirstChild("formula"));
+    else
+        p = nullptr;
+    while (p)
+    {
+        int v;
+        auto sc = 0;
+        if (p->QueryIntAttribute("scene", &v) == TIXML_SUCCESS)
+            sc = v;
+
+        auto mi = 0;
+        if (p->QueryIntAttribute("i", &v) == TIXML_SUCCESS)
+            mi = v;
+        auto *fs = &(formulamods[sc][mi]);
+
+        formulaFromXMLElement(fs, p);
+        p = TINYXML_SAFE_TO_ELEMENT(p->NextSibling("formula"));
     }
 
     for (int i = 0; i < n_customcontrollers; i++)
@@ -2176,6 +2226,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
                             TiXmlElement mr("modrouting");
                             mr.SetAttribute("source", r->at(b).source_id);
                             mr.SetAttribute("depth", float_to_str(r->at(b).depth, tempstr));
+                            mr.SetAttribute("muted", r->at(b).muted);
                             p.InsertEndChild(mr);
                         }
                     }
@@ -2275,6 +2326,14 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
             if (uses_wavetabledata(scene[sc].osc[os].type.val.i))
             {
                 on.SetAttribute("wavetable_display_name", scene[sc].osc[os].wavetable_display_name);
+                auto wtfo = scene[sc].osc[os].wavetable_formula;
+                auto wtfol = wtfo.length();
+                on.SetAttribute("wavetable_formula",
+                                base64_encode((unsigned const char *)wtfo.c_str(), wtfol));
+                on.SetAttribute("wavetable_formula_nframes",
+                                scene[sc].osc[os].wavetable_formula_nframes);
+                on.SetAttribute("wavetable_formula_res_base",
+                                scene[sc].osc[os].wavetable_formula_res_base);
             }
 
             auto ec = &(scene[sc].osc[os].extraConfig);
@@ -2328,6 +2387,25 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
         }
     }
     patch.InsertEndChild(mseg);
+
+    TiXmlElement formulae("formulae");
+    for (int sc = 0; sc < n_scenes; sc++)
+    {
+        for (int l = 0; l < n_lfos; l++)
+        {
+            if (scene[sc].lfo[l].shape.val.i == lt_formula)
+            {
+                TiXmlElement p("formula");
+                p.SetAttribute("scene", sc);
+                p.SetAttribute("i", l);
+
+                auto *fs = &(formulamods[sc][l]);
+                formulaToXMLElement(fs, p);
+                formulae.InsertEndChild(p);
+            }
+        }
+    }
+    patch.InsertEndChild(formulae);
 
     TiXmlElement cc("customcontroller");
     for (int l = 0; l < n_customcontrollers; l++)
@@ -2552,6 +2630,8 @@ void SurgePatch::msegToXMLElement(MSEGStorage *ms, TiXmlElement &p) const
         seg.SetAttribute("type", (int)(ms->segments[s].type));
         seg.SetAttribute("useDeform", (int)(ms->segments[s].useDeform));
         seg.SetAttribute("invertDeform", (int)(ms->segments[s].invertDeform));
+        seg.SetAttribute("retriggerFEG", (int)(ms->segments[s].retriggerFEG));
+        seg.SetAttribute("retriggerAEG", (int)(ms->segments[s].retriggerAEG));
         segs.InsertEndChild(seg);
     }
     p.InsertEndChild(segs);
@@ -2652,6 +2732,16 @@ void SurgePatch::msegFromXMLElement(MSEGStorage *ms, TiXmlElement *p, bool resto
             else
                 ms->segments[idx].invertDeform = false;
 
+            if (seg->QueryIntAttribute("retriggerFEG", &v) == TIXML_SUCCESS)
+                ms->segments[idx].retriggerFEG = v;
+            else
+                ms->segments[idx].retriggerFEG = false;
+
+            if (seg->QueryIntAttribute("retriggerAEG", &v) == TIXML_SUCCESS)
+                ms->segments[idx].retriggerAEG = v;
+            else
+                ms->segments[idx].retriggerAEG = false;
+
             seg = TINYXML_SAFE_TO_ELEMENT(seg->NextSibling("segment"));
 
             idx++;
@@ -2738,5 +2828,25 @@ void SurgePatch::stepSeqFromXmlElement(StepSequencerStorage *ss, TiXmlElement *p
             ss->steps[s] = (float)d;
         else
             ss->steps[s] = 0.f;
+    }
+}
+
+void SurgePatch::formulaToXMLElement(FormulaModulatorStorage *fs, TiXmlElement &parent) const
+{
+    parent.SetAttribute("formula", base64_encode((unsigned const char *)fs->formulaString.c_str(),
+                                                 fs->formulaString.length()));
+    parent.SetAttribute("interpreter", (int)fs->interpreter);
+}
+
+void SurgePatch::formulaFromXMLElement(FormulaModulatorStorage *fs, TiXmlElement *parent) const
+{
+    auto fb64 = parent->Attribute("formula");
+    fs->setFormula(base64_decode(fb64));
+
+    int interp;
+    fs->interpreter = FormulaModulatorStorage::LUA;
+    if (parent->QueryIntAttribute("interpreter", &interp) == TIXML_SUCCESS)
+    {
+        fs->interpreter = (FormulaModulatorStorage::Interpreter)(interp);
     }
 }

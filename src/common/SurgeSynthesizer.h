@@ -16,9 +16,8 @@
 #pragma once
 #include "SurgeStorage.h"
 #include "SurgeVoice.h"
-#include "effect/Effect.h"
+#include "Effect.h"
 #include "BiquadFilter.h"
-#include "UserInteractions.h"
 
 struct QuadFilterChainState;
 
@@ -26,32 +25,6 @@ struct QuadFilterChainState;
 #include <utility>
 #include <atomic>
 #include <cstdio>
-
-#if TARGET_AUDIOUNIT
-class aulayer;
-typedef aulayer PluginLayer;
-#elif TARGET_VST3
-class SurgeVst3Processor;
-typedef SurgeVst3Processor PluginLayer;
-#elif TARGET_VST2
-class Vst2PluginInstance;
-using PluginLayer = Vst2PluginInstance;
-#elif TARGET_LV2
-class SurgeLv2Wrapper;
-using PluginLayer = SurgeLv2Wrapper;
-#elif TARGET_JUCE
-class JUCEPluginLayerProxy;
-using PluginLayer = JUCEPluginLayerProxy;
-#elif TARGET_JUCE_SYNTH
-#include <JuceHeader.h>
-class SurgeSynthProcessor;
-using PluginLayer = SurgeSynthProcessor;
-#elif TARGET_HEADLESS
-class HeadlessPluginLayerProxy;
-using PluginLayer = HeadlessPluginLayerProxy;
-#else
-class PluginLayer;
-#endif
 
 struct timedata
 {
@@ -86,6 +59,11 @@ class alignas(16) SurgeSynthesizer
 
     // methods
   public:
+    struct ID;
+    struct PluginLayer
+    {
+        virtual void surgeParameterUpdated(const ID &, float) = 0;
+    };
     SurgeSynthesizer(PluginLayer *parent, std::string suppliedDataPath = "");
     virtual ~SurgeSynthesizer();
     void playNote(char channel, char key, char velocity, char detune);
@@ -114,7 +92,14 @@ class alignas(16) SurgeSynthesizer
 
     void resetStateFromTimeData();
     void processControl();
-    void processThreadunsafeOperations();
+    /*
+     * processThreadunsafeOperations reloads a patch if the audio thread isn't running
+     * but if it is running lets the deferred queue handle it. But it has an option
+     * which is *extremely dangerous* to force you to load in the current thread immediately.
+     * If you use this option and dont' know what you are doing it will explode - basically
+     * we only use it in the startup constructor path.
+     */
+    void processThreadunsafeOperations(bool doItEvenIfAudioIsRunningDANGER = false);
     bool loadFx(bool initp, bool force_reload_all);
     bool loadOscalgos();
     bool load_fx_needed;
@@ -155,41 +140,23 @@ class alignas(16) SurgeSynthesizer
     /*
      * For more on this IFDEF see the comment in SurgeSynthesizerIDManagement.cpp
      */
-#if TARGET_VST3 || TARGET_HEADLESS
-#define PLUGIN_ID_AND_INDEX_ARE_DISTINCT 1
-#endif
-
     struct ID
     {
         int getDawSideIndex() const { return dawindex; }
-        int getDawSideId() const
-        {
-#if PLUGIN_ID_AND_INDEX_ARE_DISTINCT
-            return dawid;
-#else
-            return dawindex;
-#endif
-        }
+        int getDawSideId() const { return dawid; }
         int getSynthSideId() const { return synthid; }
 
         std::string toString() const
         {
             std::ostringstream oss;
-            oss << "ID[ dawidx=" << dawindex
-#if PLUGIN_ID_AND_INDEX_ARE_DISTINCT
-                << ", dawid=" << dawid
-#endif
-                << " synthid=" << synthid << " ]";
+            oss << "ID[ dawidx=" << dawindex << ", dawid=" << dawid << " synthid=" << synthid
+                << " ]";
             return oss.str();
         }
 
         bool operator==(const ID &other) const
         {
-            return dawindex == other.dawindex
-#if PLUGIN_ID_AND_INDEX_ARE_DISTINCT
-                   && dawid == other.dawid
-#endif
-                   && synthid == other.synthid;
+            return dawindex == other.dawindex && dawid == other.dawid && synthid == other.synthid;
         }
         bool operator!=(const ID &other) const { return !(*this == other); }
 
@@ -200,17 +167,11 @@ class alignas(16) SurgeSynthesizer
         }
 
       private:
-        int dawindex = -1,
-#if PLUGIN_ID_AND_INDEX_ARE_DISTINCT
-            dawid = -1,
-#endif
-            synthid = -1;
+        int dawindex = -1, dawid = -1, synthid = -1;
         friend SurgeSynthesizer;
     };
 
-#if PLUGIN_ID_AND_INDEX_ARE_DISTINCT
     bool fromDAWSideId(int i, ID &q);
-#endif
     bool fromDAWSideIndex(int i, ID &q);
     bool fromSynthSideId(int i, ID &q);
     bool fromSynthSideIdWithGuiOffset(int i, int start_paramtags, int start_metacontrol_tag, ID &q);
@@ -315,6 +276,8 @@ class alignas(16) SurgeSynthesizer
     ModulationRouting *getModRouting(long ptag, modsources modsource);
     bool setModulation(long ptag, modsources modsource, float value);
     float getModulation(long ptag, modsources modsource);
+    void muteModulation(long ptag, modsources modsource, bool mute);
+    bool isModulationMuted(long ptag, modsources modsource);
     float getModDepth(long ptag, modsources modsource);
     void clearModulation(long ptag, modsources modsource, bool clearEvenIfInvalid = false);
     void clear_osc_modulation(
@@ -404,6 +367,7 @@ class alignas(16) SurgeSynthesizer
     QuadFilterChainState *FBQ[n_scenes];
 
     std::string hostProgram = "Unknown Host";
+    std::string juceWrapperType = "Unknown Wrapper Type";
     bool activateExtraOutputs = true;
     void setupActivateExtraOutputs();
 

@@ -14,15 +14,59 @@
 #include "CScalableBitmap.h"
 #include "SurgeGUIEditor.h"
 #include "SurgeSynthFlavorExtensions.h"
+#include "SurgeJUCELookAndFeel.h"
+#include "RuntimeFont.h"
+#include <version.h>
 
 //==============================================================================
-SurgeSynthEditor::SurgeSynthEditor(SurgeSynthProcessor &p)
-    : AudioProcessorEditor(&p), processor(p), EscapeFromVSTGUI::JuceVSTGUIEditorAdapter(this)
+SurgeSynthEditor::SurgeSynthEditor(SurgeSynthProcessor &p) : AudioProcessorEditor(&p), processor(p)
 {
-    setSize(BASE_WINDOW_SIZE_X, BASE_WINDOW_SIZE_Y);
+    surgeLF = std::make_unique<SurgeJUCELookAndFeel>();
+    juce::LookAndFeel::setDefaultLookAndFeel(surgeLF.get());
+    adapter = std::make_unique<SurgeGUIEditor>(this, processor.surge.get());
+
+    int yExtra = 0;
+    keyboard = std::make_unique<juce::MidiKeyboardComponent>(
+        processor.midiKeyboardState, juce::MidiKeyboardComponent::Orientation::horizontalKeyboard);
+    auto mcValue = Surge::Storage::getUserDefaultValue(&(this->processor.surge->storage),
+                                                       Surge::Storage::MiddleC, 1);
+
+    keyboard->setOctaveForMiddleC(3 + mcValue);
+    keyboard->setLowestVisibleKey(60 - 30);
+    tempoLabel = std::make_unique<juce::Label>("Tempo", "Tempo");
+    tempoTypein = std::make_unique<juce::TextEditor>("Tempo");
+    tempoTypein->setText(std::to_string((int)(processor.surge->storage.temposyncratio * 120)));
+    tempoTypein->onReturnKey = [this]() {
+        // this is thread sloppy
+        float newT = std::atof(tempoTypein->getText().toRawUTF8());
+        processor.standaloneTempo = newT;
+    };
+    tempoLabel->setFont(Surge::GUI::getFontManager()->getLatoAtSize(12));
+
+    addChildComponent(*keyboard);
+    addChildComponent(*tempoLabel);
+    addChildComponent(*tempoTypein);
+    drawExtendedControls = adapter->getShowVirtualKeyboard();
+    bool addTempo = processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
+    if (drawExtendedControls)
+    {
+        keyboard->setVisible(true);
+        tempoLabel->setVisible(addTempo);
+        tempoTypein->setVisible(addTempo);
+        yExtra = extraYSpaceForVirtualKeyboard;
+    }
+    else
+    {
+        keyboard->setVisible(false);
+        tempoLabel->setVisible(false);
+        tempoTypein->setVisible(false);
+
+        yExtra = 0;
+    }
+
+    setSize(BASE_WINDOW_SIZE_X, BASE_WINDOW_SIZE_Y + yExtra);
     setResizable(true, false); // For now
 
-    adapter = std::make_unique<SurgeGUIEditor>(this, processor.surge.get());
     adapter->open(nullptr);
 
     idleTimer = std::make_unique<IdleTimer>(this);
@@ -51,8 +95,42 @@ void SurgeSynthEditor::idle() { adapter->idle(); }
 
 void SurgeSynthEditor::resized()
 {
-    // This is generally where you'll want to lay out the positions of any
-    // subcomponents in your editor..
+    drawExtendedControls = adapter->getShowVirtualKeyboard();
+    bool addTempo = processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
+    if (drawExtendedControls)
+    {
+        auto y = getHeight() - extraYSpaceForVirtualKeyboard;
+        auto x = addTempo ? 90 : 0;
+        keyboard->setBounds(x, y, getWidth() - x, extraYSpaceForVirtualKeyboard);
+        keyboard->setVisible(true);
+        tempoLabel->setVisible(addTempo);
+        tempoTypein->setVisible(addTempo);
+        if (addTempo)
+        {
+            tempoLabel->setBounds(3, y + 3, x - 6, extraYSpaceForVirtualKeyboard / 2 - 3);
+            tempoTypein->setBounds(3, y + 3 + extraYSpaceForVirtualKeyboard / 2, x - 6,
+                                   extraYSpaceForVirtualKeyboard / 2 - 6);
+        }
+    }
+    else
+    {
+        keyboard->setVisible(false);
+        tempoLabel->setVisible(false);
+        tempoTypein->setVisible(false);
+    }
+}
+
+void SurgeSynthEditor::parentHierarchyChanged()
+{
+    for (auto *p = getParentComponent(); p != nullptr; p = p->getParentComponent())
+    {
+        if (auto dw = dynamic_cast<juce::DocumentWindow *>(p))
+        {
+            std::ostringstream oss;
+            oss << "Surge XT - " << Surge::Build::FullVersionStr;
+            dw->setName(oss.str());
+        }
+    }
 }
 
 void SurgeSynthEditor::IdleTimer::timerCallback()
@@ -111,38 +189,14 @@ void SurgeSynthEditor::endParameterEdit(Parameter *p)
     par->endChangeGesture();
 }
 
-namespace Surge
+juce::PopupMenu SurgeSynthEditor::hostMenuFor(Parameter *p)
 {
-namespace GUI
-{
+    auto par = processor.paramsByID[processor.surge->idForParameter(p)];
+#if SURGE_JUCE_HOST_CONTEXT
+    if (auto *c = getHostContext())
+        if (auto menuInfo = c->getContextMenuForParameterIndex(par))
+            return menuInfo->getEquivalentPopupMenu();
+#endif
 
-/*
-** Return the backing scale factor. This is the scale factor which maps a phyiscal
-** pixel to a logical pixel. It is in units that a high density display (so 4 physical
-** pixels in a single pixel square) would have a backing scale factor of 2.0.
-**
-** We retain this value as a float and do not scale it by 100, like we do with
-** user specified scales, to better match the OS API
-*/
-float getDisplayBackingScaleFactor(VSTGUI::CFrame *) { return 2; }
-
-/*
-** Return the screen dimensions of the best screen containing this frame. If the
-** frame is not valid or has not yet been shown or so on, return a screen of
-** size 0x0 at position 0,0.
-*/
-VSTGUI::CRect getScreenDimensions(VSTGUI::CFrame *)
-{
-    return VSTGUI::CRect(VSTGUI::CPoint(0, 0), VSTGUI::CPoint(1400, 700));
+    return juce::PopupMenu();
 }
-} // namespace GUI
-
-namespace UserInteractions
-{
-/*
- * This means I have a link wrong
- */
-void openFolderInFileBrowser(const std::string &folder) {}
-
-} // namespace UserInteractions
-} // namespace Surge

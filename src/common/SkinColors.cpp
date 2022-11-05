@@ -111,6 +111,26 @@ const Surge::Skin::Color Background("effect.grid.bypassed.selected.background", 
 } // namespace Grid
 } // namespace Effect
 
+namespace FormulaEditor
+{
+const Surge::Skin::Color Background("formulaeditor.background", 245, 246, 238),
+    Highlight("formulaeditor.highlight", 192, 192, 192), Text("formulaeditor.text", 0, 0, 0),
+    LineNumBackground("formulaeditor.linenumber.background", 151, 151, 151),
+    LineNumText("formulaeditor.linenumber.text", 0, 0, 0);
+
+namespace Lua
+{
+const Surge::Skin::Color Bracket("formulaeditor.lua.comment", 57, 59, 69),
+    Comment("formulaeditor.lua.comment", 151, 151, 151),
+    Error("formulaeditor.lua.error", 255, 0, 0),
+    Identifier("formulaeditor.lua.identifier", 38, 109, 190),
+    Interpunction("formulaeditor.lua.interpunction", 17, 17, 17),
+    Keyword("formulaeditor.lua.keyword", 83, 123, 0),
+    Number("formulaeditor.lua.number", 203, 75, 22),
+    String("formulaeditor.lua.string", 151, 117, 0);
+} // namespace Lua
+} // namespace FormulaEditor
+
 namespace InfoWindow
 {
 const Surge::Skin::Color Background("infowindow.background", 255, 255, 255),

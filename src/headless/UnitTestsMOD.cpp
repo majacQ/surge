@@ -9,7 +9,7 @@
 #include "catch2/catch2.hpp"
 
 #include "UnitTestUtilities.h"
-#include "effect/ModControl.h"
+#include "ModControl.h"
 
 using namespace Surge::Test;
 
@@ -27,7 +27,7 @@ TEST_CASE("ADSR Envelope Behaviour", "[mod]")
                            bool isAnalog, float releaseAfter, float runUntil, float pushSusAt = -1,
                            float pushSusTo = 0) {
         auto *adsrstorage = &(surge->storage.getPatch().scene[0].adsr[0]);
-        std::shared_ptr<AdsrEnvelope> adsr(new AdsrEnvelope());
+        std::shared_ptr<ADSRModulationSource> adsr(new ADSRModulationSource());
         adsr->init(&(surge->storage), adsrstorage, surge->storage.getPatch().scenedata[0], nullptr);
         REQUIRE(adsr.get());
 
@@ -569,8 +569,9 @@ TEST_CASE("Non-MPE pitch bend", "[mod]")
 
 TEST_CASE("Pitch Bend and Tuning", "[mod][tun]")
 {
-    std::vector<std::string> testScales = {"test-data/scl/12-intune.scl",
-                                           "test-data/scl/zeus22.scl", "test-data/scl/6-exact.scl"};
+    std::vector<std::string> testScales = {"resources/test-data/scl/12-intune.scl",
+                                           "resources/test-data/scl/zeus22.scl",
+                                           "resources/test-data/scl/6-exact.scl"};
 
     SECTION("Multi Scale Bend Distances")
     {
@@ -716,7 +717,7 @@ TEST_CASE("LfoTempoSync Latch Drift", "[mod]")
 
         REQUIRE(surge);
 
-        auto lfo = std::make_unique<LfoModulationSource>();
+        auto lfo = std::make_unique<LFOModulationSource>();
         auto ss = std::make_unique<StepSequencerStorage>();
         auto lfostorage = &(surge->storage.getPatch().scene[0].lfo[0]);
         lfostorage->rate.temposync = true;
@@ -858,7 +859,7 @@ TEST_CASE("Keytrack Morph", "[mod]")
     {
         auto surge = Surge::Headless::createSurge(44100);
         REQUIRE(surge);
-        surge->loadPatchByPath("test-data/patches/Keytrack-Morph-3046.fxp", -1, "Test");
+        surge->loadPatchByPath("resources/test-data/patches/Keytrack-Morph-3046.fxp", -1, "Test");
         for (int i = 0; i < 100; ++i)
             surge->process();
 

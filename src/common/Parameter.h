@@ -125,7 +125,8 @@ enum ctrltypes
     ct_character,
     ct_sineoscmode,
     ct_sinefmlegacy,
-    ct_countedset_percent, // what % through a counted set are you
+    ct_countedset_percent,            // what % through a counted set are you
+    ct_countedset_percent_extendable, // what % through a counted set are you
     ct_vocoder_bandcount,
     ct_distortion_waveshape,
     ct_flangerpitch,
@@ -206,10 +207,17 @@ struct CountedSetUserData : public ParamUserData
     virtual int getCountedSetSize() = 0; // A constant time answer to the count of the set
 };
 
+class Parameter;
+
 struct ParameterExternalFormatter : public ParamUserData
 {
-    virtual void formatValue(float value, char *txt, int txtlen) = 0;
-    virtual bool stringToValue(const char *txt, float &outVal) = 0;
+    virtual bool formatValue(Parameter *p, float value, char *txt, int txtlen) = 0;
+    virtual bool formatAltValue(Parameter *p, float value, char *txt, int txtlen)
+    {
+        txt[0] = 0;
+        return true;
+    }
+    virtual bool stringToValue(Parameter *p, const char *txt, float &outVal) = 0;
 };
 
 struct ParameterDiscreteIndexRemapper : public ParamUserData
@@ -380,8 +388,8 @@ class Parameter
     const char *get_name();
     const char *get_full_name();
     void set_name(const char *n); // never change name_storage as it is used for storage/recall
-    const char *get_internal_name();
-    const char *get_storage_name();
+    const char *get_internal_name() const;
+    const char *get_storage_name() const;
     const wchar_t *getUnit() const;
     void get_display(char *txt, bool external = false, float ef = 0.f);
     enum ModulationDisplayMode
@@ -406,10 +414,14 @@ class Parameter
     void set_value_f01(float v, bool force_integer = false);
     bool set_value_from_string(std::string s);
     bool set_value_from_string_onto(std::string s, pdata &ontoThis);
-    float
-    get_modulation_f01(float mod); // used by the gui to get the position of the modulated handle
-    float set_modulation_f01(float v); // used by the gui to set the modulation to match the
-                                       // position of the modulated handle
+
+    /*
+     * These two functions convert the modulation depth to a -1,1 range appropriate
+     * for this parameter
+     */
+    float get_modulation_f01(float mod) const;
+    float set_modulation_f01(float v) const;
+
     float calculate_modulation_value_from_string(const std::string &s, bool &valid);
 
     void bound_value(bool force_integer = false);
