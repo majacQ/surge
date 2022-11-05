@@ -3,11 +3,8 @@
 #include <iostream>
 #include <iomanip>
 
-class HeadlessPluginLayerProxy
+class HeadlessPluginLayerProxy : public SurgeSynthesizer::PluginLayer
 {
-public:
-    void updateDisplay()
-    {
-        std::cerr << "HeadlessPluginLayerProxy::updateDisplay" << std::endl;
-    }
+  public:
+    void surgeParameterUpdated(const SurgeSynthesizer::ID &id, float d) override {}
 };

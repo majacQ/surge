@@ -1,69 +1,72 @@
 #include <iostream>
 #include <iomanip>
+#include <sstream>
 
-#include "SurgeSynthesizer.h"
+#include "HeadlessUtils.h"
+#include "Player.h"
+#include "HeadlessNonTestFunctions.h"
+#include "version.h"
 
-#include "HeadlessPluginLayerProxy.h"
+#include "Tunings.h"
 
-int main(int argc, char** argv)
+/*
+ * This is a simple main that either routes around or routes to catch2 main.
+ * If it routes around, it heads into something in HeadlessNonTestFunctions
+ */
+int main(int argc, char **argv)
 {
-    std::cout << "Surge Headless Mode" << std::endl;
+    std::cout << "# surge-headless: " << Surge::Build::FullVersionStr
+              << " built: " << Surge::Build::BuildDate << " " << Surge::Build::BuildTime << "\n";
 
-    HeadlessPluginLayerProxy *parent = new HeadlessPluginLayerProxy();
-    std::unique_ptr<SurgeSynthesizer> surge(new SurgeSynthesizer(parent));
-    surge->setSamplerate(44100);
-
-    /*
-    ** Change a parameter in the scene. Do this by traversing the 
-    ** graph in the current patch (which is in surge->storage).
-    **
-    ** Clearly a more fulsome headless API would provide wrappers around
-    ** this for common activities. This sets up a pair of detuned saw waves
-    ** both active.
-    */
-    surge->storage.getPatch().scene[0].osc[0].pitch.set_value_f01(4);
-    surge->storage.getPatch().scene[0].mute_o2.set_value_f01(0,true);
-    surge->storage.getPatch().scene[0].osc[1].pitch.set_value_f01(1);
-
-    /*
-    ** Play a note. channel, note, velocity, detune
-    */
-    surge->playNote((char)0, (char)60, (char)100, 0); 
-
-    /*
-    ** Strip off some processing first to avoid the attach transient
-    */
-    for(auto i=0; i<20; ++i) surge->process();
-
-    /*
-    ** Then run the sampler
-    */
-    int blockCount = 30;
-    int overSample = 8; // we want to include n samples per printed row. 
-    float overS = 0;
-    int sampleCount = 0;
-    for (auto i = 0; i < blockCount; ++i )
+    if (argc > 2 && strcmp(argv[1], "--non-test") == 0)
     {
-        surge->process();
-
-        for (int sm = 0; sm < BLOCK_SIZE; ++sm)
+        std::cout << "# Running in non-test mode : " << argv[2] << std::endl;
+        if (strcmp(argv[2], "--stats-from-every-patch") == 0)
         {
-            float avgOut = 0;
-            for (int oi = 0; oi < surge->getNumOutputs(); ++oi)
-            {
-                avgOut += surge->output[oi][sm];
-            }
-
-            overS += avgOut;
-            sampleCount ++;
-
-            if (((sampleCount) % overSample) == 0)
-            {
-                overS /= overSample;
-                int gWidth = (int)((overS + 1)*30);
-                std::cout << "Sample: " << std::setw( 15 ) << overS << std::setw(gWidth) << "X" << std::endl;;
-                overS = 0.0; // start accumulating again
-            }
+            Surge::Headless::NonTest::statsFromPlayingEveryPatch();
         }
+        if (strcmp(argv[2], "--restream-templates") == 0)
+        {
+            Surge::Headless::NonTest::restreamTemplatesWithModifications();
+        }
+        if (strcmp(argv[2], "--generate-nlf-norms") == 0)
+        {
+            Surge::Headless::NonTest::generateNLFeedbackNorms();
+        }
+        if (strcmp(argv[2], "--filter-analyzer") == 0)
+        {
+            if (argc < 4)
+            {
+                std::cout << "Usage: --filter-analyzer type subtype\n";
+                return 1;
+            }
+            Surge::Headless::NonTest::filterAnalyzer(std::atoi(argv[3]), std::atoi(argv[4]),
+                                                     std::cout);
+        }
+        if (strcmp(argv[2], "--performance") == 0)
+        {
+            Surge::Headless::NonTest::performancePlay(argv[3], std::atoi(argv[4]));
+        }
+        return 0;
+    }
+    else
+    {
+        if (argc > 1 && strcmp(argv[1], "--help") == 0)
+        {
+            std::cout
+                << "It runs in two modes; a regtest mode and a utility mode. To use regtest mode\n"
+                << "see the options below. To use utility mode make the first argument "
+                   "'--non-test' and\n"
+                << "then use the options below\n\n"
+                << "   --non-test --stats-from-every-patch    # play every patch and show RMS\n"
+                << "   --non-test --filter-analyzer ft fst    # analyze filter type/subtype for "
+                   "response\n"
+                << "\n"
+                << "If you exlude the `--non-test` argument, standard catch2 arguments, below, "
+                   "apply\n\n";
+        }
+
+        extern int runAllTests(int, char **);
+        return runAllTests(argc, argv);
     }
 }
