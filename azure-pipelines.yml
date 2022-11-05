@@ -2,6 +2,13 @@
 # https://aka.ms/yaml
 
 trigger:
+  <<<<<<< classic
+- classic
+- release/*
+
+pr:
+- classic
+  =======
 - main
 - xt-alpha
 - release-xt/*
@@ -9,6 +16,7 @@ trigger:
 pr:
 - main
 - xt-alpha
+  >>>>>>> release/1.6.2
 
 jobs:
 - job: Build
@@ -273,8 +281,12 @@ jobs:
 
       # remove refs/heads/
       export BRANCH="${BUILD_SOURCEBRANCH/refs\/heads\/}"
+  <<<<<<< classic
+      if ! [[ $BRANCH =~ ^(classic|release/.+)$ ]]; then
+  =======
 
       if ! [[ $BRANCH =~ ^(main|release-xt/.+)$ ]]; then
+  >>>>>>> release/1.6.2
         exit
       fi
 
