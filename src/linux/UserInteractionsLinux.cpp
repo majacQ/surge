@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <thread>
+#include <sstream>
 
 /*
 ** In June 2019, @baconpaul chose to implement these with an attempt
@@ -151,7 +152,7 @@ void showHTML( const std::string &html )
 {
     // FIXME - there's proper APIs for this that crash on MacOS 
     std::ostringstream fns;
-    fns << "/tmp/surge-tuning." << rand() << ".html";
+    fns << "/tmp/surge-data." << rand() << ".html";
 
     FILE *f = fopen(fns.str().c_str(), "w" );
     if( f )
@@ -171,6 +172,7 @@ void openFolderInFileBrowser(const std::string& folder)
 
 void promptFileOpenDialog(const std::string& initialDirectory,
                           const std::string& filterSuffix,
+                          const std::string& filterDescription,
                           std::function<void(std::string)> callbackOnOpen,
                           bool canSelectDirectories,
                           bool canCreateDirectories,
