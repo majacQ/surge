@@ -1,181 +1,198 @@
-cmake_minimum_required(VERSION 3.10)
-project(Surge VERSION 1.0.0 LANGUAGES CXX ASM)
-#set(CMAKE_BUILD_TYPE Debug)
+# vi:set sw=2 et:
+cmake_minimum_required(VERSION 3.15)
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(CMAKE_OSX_DEPLOYMENT_TARGET 10.11 CACHE STRING "Minimum macOS version")
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-
-list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake/")
-find_package(LibMidiFile ${PACKAGE_OPTIONS})
-
-
-set(SURGE_COMMON_SOURCES
-    src/common/dsp/effect/ConditionerEffect.cpp
-    src/common/dsp/effect/DistortionEffect.cpp
-    src/common/dsp/effect/DualDelayEffect.cpp
-    src/common/dsp/effect/Effect.cpp
-    src/common/dsp/effect/FreqshiftEffect.cpp
-    src/common/dsp/effect/PhaserEffect.cpp
-    src/common/dsp/effect/Reverb1Effect.cpp
-    src/common/dsp/effect/Reverb2Effect.cpp
-    src/common/dsp/effect/RotarySpeakerEffect.cpp
-    src/common/dsp/effect/VocoderEffect.cpp
-    src/common/dsp/AdsrEnvelope.cpp
-    src/common/dsp/BiquadFilter.cpp
-    src/common/dsp/BiquadFilterSSE2.cpp
-    src/common/dsp/DspUtilities.cpp
-    src/common/dsp/FilterCoefficientMaker.cpp
-    src/common/dsp/FMOscillator.cpp
-    src/common/dsp/LfoModulationSource.cpp
-    src/common/dsp/Oscillator.cpp
-    src/common/dsp/QuadFilterChain.cpp
-    src/common/dsp/QuadFilterUnit.cpp
-    src/common/dsp/SampleAndHoldOscillator.cpp
-    src/common/dsp/SurgeSuperOscillator.cpp
-    src/common/dsp/SurgeVoice.cpp
-    src/common/dsp/VectorizedSvfFilter.cpp
-    src/common/dsp/Wavetable.cpp
-    src/common/dsp/WavetableOscillator.cpp
-    src/common/dsp/WindowOscillator.cpp
-    src/common/thread/CriticalSection.cpp
-    src/common/util/FpuState.cpp
-    src/common/vt_dsp/basic_dsp.cpp
-    src/common/vt_dsp/halfratefilter.cpp
-    src/common/vt_dsp/lipol.cpp
-    src/common/vt_dsp/macspecific.cpp
-    src/common/Parameter.cpp
-    src/common/precompiled.cpp
-    src/common/Sample.cpp
-    src/common/SampleLoadRiffWave.cpp
-    src/common/SurgeError.cpp
-    src/common/SurgePatch.cpp
-    src/common/SurgeStorage.cpp
-    src/common/SurgeStorageLoadWavetable.cpp
-    src/common/SurgeSynthesizer.cpp
-    src/common/SurgeSynthesizerIO.cpp
-    src/common/UserDefaults.cpp
-    libs/xml/tinyxml.cpp
-    libs/xml/tinyxmlerror.cpp
-    libs/xml/tinyxmlparser.cpp
-    libs/filesystem/filesystem.cpp
-)
-
-set(SURGE_COMMON_INCLUDES
-    libs/
-    libs/filesystem
-    libs/xml
-    src/common
-    src/common/dsp
-    src/common/thread
-    src/common/vt_dsp
-)
-
-add_executable(surge-headless
-    ${SURGE_COMMON_SOURCES}
-    ${LIB_MIDIFILE_SOURCES}
-   src/headless/main.cpp
-   src/headless/UserInteractionsHeadless.cpp
-   src/headless/LinkFixesHeadless.cpp
-   src/headless/HeadlessUtils.cpp
-   src/headless/Player.cpp
-   src/headless/Stress.cpp   
-)
-
-target_compile_features(surge-headless
-    PRIVATE
-        cxx_std_17
-)
-
-target_compile_definitions(surge-headless
-    PRIVATE
-        TARGET_HEADLESS=1
-        LIBMIDIFILE=1
-)
-
-target_include_directories(surge-headless
-    PRIVATE
-        ${SURGE_COMMON_INCLUDES}
-        ${LIB_MIDIFILE_INCLUDES}
-        src/headless
-)
-
-find_package(LibSndFile ${PACKAGE_OPTION})
-if(NOT LIBSNDFILE_FOUND)
-    message(WARNING "LibSndFile not installed; building without wav support")
-    message(WARNING "You can 'brew install libsndfile' or 'apt-get install libsndfile1-dev'")
-else()
-    target_compile_definitions(surge-headless
-        PRIVATE
-            LIBSNDFILE=1
-    )
-    target_link_libraries(surge-headless ${LIBSNDFILE_LIBRARIES})
-    include_directories(surge-headless ${LIBSNDFILE_INCLUDE_DIRS})
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
 endif()
 
-# *NIX
-if (UNIX)
-    target_compile_options(surge-headless
-        PRIVATE
-            -msse2
-            "-D_aligned_malloc(x,a)=malloc(x)"
-            "-D_aligned_free(x)=free(x)"
-    )
+if(NOT BUILD_TESTING)
+  option(BUILD_TESTING "" OFF)
 endif()
 
-# macOS
-if (APPLE)
-    target_compile_definitions(surge-headless
-        PRIVATE
-            MAC=1
-            MAC_COCOA=1
-            COCOA=1
-            OBJC_OLD_DISPATCH_PROTOTYPES=1
-    )
+project(Surge VERSION 1.1.0 LANGUAGES C CXX ASM)
 
-    target_include_directories(surge-headless
-        PRIVATE
-            src/mac
-    )
+# Banner {{{
+message(STATUS "It's Surge XT, folks! Version is ${PROJECT_VERSION}")
+message(STATUS "CMAKE_BUILD_TYPE is ${CMAKE_BUILD_TYPE}")
+message(STATUS "CMake version is ${CMAKE_VERSION}")
+message(STATUS "Compiler version is ${CMAKE_CXX_COMPILER_VERSION}")
+math(EXPR SURGE_BITNESS "${CMAKE_SIZEOF_VOID_P} * 8" OUTPUT_FORMAT DECIMAL)
+message(STATUS "Targeting ${SURGE_BITNESS}-bit configuration")
+# }}}
 
-    target_link_libraries(surge-headless
-        "-framework ApplicationServices"
-        "-framework CoreFoundation"
-    )
+# Make Sure the REpo is properly cloned {{{
+set(SURGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+if (NOT EXISTS "${SURGE_SOURCE_DIR}/libs/tuning-library/README.md")
+  message(FATAL_ERROR "Cannot find the contents of the tuning-library submodule, but this usually means"
+          " that you haven't done a git submodule update; and so your repo will not build properly. "
+          "To resolve this, please run `git submodule update --init --recursive` and re-run cmake")
 endif()
 
-# Linux
-if (UNIX AND NOT APPLE)
-    find_package(Threads REQUIRED)
+# }}}
 
-    add_custom_target(
-        scalable-piggy ALL
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/linux/_ScalablePiggy.S
-    )
+# Global compiler/linker settings {{{
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 17)
 
-    add_custom_command(
-        OUTPUT
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/linux/_ScalablePiggy.S
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/linux/ScalablePiggy.S
-
-            COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/scripts/linux/emit-vector-piggy.py ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-
-    target_compile_definitions(surge-headless
-        PRIVATE
-            LINUX=1
-    )
-
-    target_sources(surge-headless
-        PRIVATE
-            src/linux/ConfigurationXml.S
-            src/linux/ScalablePiggy.S
-    )
-
-    target_include_directories(surge-headless
-        PRIVATE
-            src/linux
-    )
-
-    target_link_libraries(surge-headless
-        stdc++fs
-        Threads::Threads
-    )
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU" AND UNIX AND NOT APPLE AND NOT SURGE_SKIP_PIE_CHANGE)
+  message(STATUS "Setting -no-pie on EXE flags; use SURGE_SKIP_PIE_CHANGE=TRUE to avoid" )
+  set(CMAKE_EXE_LINKER_FLAGS "-no-pie")
 endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  if (${SURGE_SANITIZE})
+    message(STATUS "Sanitizer is On" )
+  endif()
+  # Any Clang or any GCC
+  add_compile_options(
+    -Wno-multichar
+    # Targeting Windows with GCC/Clang is experimental
+    $<$<NOT:$<BOOL:${WIN32}>>:-Werror>
+
+    # PE/COFF doesn't support visibility
+    $<$<NOT:$<BOOL:${WIN32}>>:-fvisibility=hidden>
+    # Inlines visibility is only relevant with C++
+    $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<COMPILE_LANGUAGE:CXX>>:-fvisibility-inlines-hidden>
+
+    # BP note: If you want to turn on llvm/gcc sanitize undo this and the link options below
+    $<$<BOOL:${SURGE_SANITIZE}>:-fsanitize=address>
+    $<$<BOOL:${SURGE_SANITIZE}>:-fsanitize=undefined>
+  )
+
+  add_link_options(
+    $<$<BOOL:${SURGE_SANITIZE}>:-fsanitize=address>
+    $<$<BOOL:${SURGE_SANITIZE}>:-fsanitize=undefined>
+  )
+
+  # Enable SSE2 on x86-32 only. It's implied on x86-64 and N/A elsewhere.
+  if(${CMAKE_SIZEOF_VOID_P} EQUAL 4)
+    include(CheckCXXSourceCompiles)
+    check_cxx_source_compiles("#ifndef __i386__
+    #error
+    #endif
+    int main() {}" SURGE_ARCH_I386)
+    if(SURGE_ARCH_I386)
+      add_compile_options(-msse2 -mfpmath=sse)
+    endif()
+  endif()
+
+  # Add AVX support
+  include(CheckCXXSourceCompiles)
+  check_cxx_source_compiles("
+#if defined(__x86_64__) || defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+  #ifndef __AVX__
+  #error
+  #endif
+#endif
+    int main() {}" COMPILER_HAS_AVX_OR_IS_ARM)
+  if(NOT COMPILER_HAS_AVX_OR_IS_ARM)
+    message(STATUS "Holding off on AVX support. See #4479 for the strategy")
+    # add_compile_options("-mavx")
+  endif()
+
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Any Clang
+    add_compile_options(
+      -Wno-deprecated-declarations
+      -Werror=inconsistent-missing-override
+      -Werror=logical-op-parentheses
+      -Werror=dynamic-class-memaccess
+      -Werror=undefined-bool-conversion
+      -Werror=bitwise-op-parentheses
+      -Werror=pointer-bool-conversion
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^AppleClang$")
+      # Apple Clang only
+      add_compile_options(
+        -faligned-allocation
+        -fasm-blocks
+      )
+    endif()
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "^GNU$")
+    # GCC only
+    add_compile_options(
+      -Wformat-truncation=0 # squelch warning about snprintf truncating strings (see PR #3977)
+      -Wno-free-nonheap-object # https://github.com/surge-synthesizer/surge/issues/4251
+      -Wno-return-local-addr # squelch sqlite3 error: function may return address of local variable
+    )
+  endif()
+endif()
+
+if(MSVC)
+  add_compile_options(
+    -WX       # treat all warnings as errors
+
+    # MSVC-only warnings, Clang-cl silently ignores these
+    /wd4244   # float to double
+    /wd4305   # truncation of variable
+    /wd4267   # int and size_t
+    /wd4018   # signed unsigned mismatch
+    /wd4388   # signed unsigned mismatch in comparison
+    /wd4065   # standalone default in a switch with no case
+    /wd4702   # unreachable code. I generally do if( a ) return foo else return bar; return nullptr so don't warn on that
+
+    # Clang-cl-only warnings
+    $<$<CXX_COMPILER_ID:Clang>:-Wno-microsoft-exception-spec>
+    $<$<CXX_COMPILER_ID:Clang>:-Wno-pragma-pack>
+
+    /Zc:alignedNew
+    /bigobj
+
+    # /arch:AVX
+
+    # Build with Multiple Processes (Clang-cl builds use Ninja instead)
+    $<$<CXX_COMPILER_ID:MSVC>:/MP>
+    # Set source and executable charsets to UTF-8
+    $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
+  )
+endif()
+# }}}
+# Source Groups {{{
+source_group("Libraries" REGULAR_EXPRESSION "libs/")
+source_group("AirWindows" REGULAR_EXPRESSION "libs/airwindows/")
+source_group("Surge Core" REGULAR_EXPRESSION "src/common/.*\.cpp")
+source_group("Surge DSP" REGULAR_EXPRESSION "src/common/dsp/")
+source_group("Surge FX" REGULAR_EXPRESSION "src/common/dsp/effects/")
+source_group("Surge GUI" REGULAR_EXPRESSION "src/surge-xt/gui/")
+source_group("Generated Code" REGULAR_EXPRESSION "version.cpp")
+source_group("Headless" REGULAR_EXPRESSION "src/surge-testrunner/")
+source_group("Surge XT Juce" REGULAR_EXPRESSION "src/surge-xt/")
+source_group("Surge FX Juce" REGULAR_EXPRESSION "src/surge-fx/")
+# }}}
+
+add_subdirectory(resources)
+add_subdirectory(src)
+
+# CI Pipeline {{{
+include(cmake/stage-extra-content.cmake)
+
+# We have a special target here which the PR pipeline uses to make sure things
+# are of the appropriate code quality. This allows us to write CMAKE rules which
+# become linters and stuff. The code will run on macos in the pipeline. I suppose
+# you could run it locally to, but really, you should know what you are doing if you
+# do that. And I'll document it so you can know that when I use it earnest in 1.9
+add_custom_target(code-quality-pipeline-checks)
+
+# Check 1: The extra content is properly specified.
+add_dependencies(code-quality-pipeline-checks download-extra-content)
+
+# Clang Format checks
+set(CLANG_FORMAT_DIRS src)
+set(CLANG_FORMAT_EXTS cpp h)
+foreach(dir ${CLANG_FORMAT_DIRS})
+  foreach(ext ${CLANG_FORMAT_EXTS})
+    list(APPEND CLANG_FORMAT_GLOBS "':(glob)${dir}/**/*.${ext}'")
+  endforeach()
+endforeach()
+add_custom_command(TARGET code-quality-pipeline-checks
+  POST_BUILD
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMAND ${CMAKE_COMMAND} -E echo About to check clang-format
+  COMMAND git ls-files -- ${CLANG_FORMAT_GLOBS} | xargs clang-format --dry-run --Werror
+  )
+# }}}

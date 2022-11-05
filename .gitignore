@@ -31,7 +31,7 @@
 *.out
 *.app
 
-# Visual studio
+# Visual Studio
 obj/
 *.sln
 *.vcxproj
@@ -42,6 +42,9 @@ packages/
 target/
 *.pdb
 packages.config
+CMakeSettings.json
+.vscode
+.cache
 
 # XCode
 Surge.xcworkspace/
@@ -55,22 +58,50 @@ installer_mac/*.dmg
 installer_osx/installer
 installer_osx/Install_Surge_*.dmg
 build_logs/
+fxbuild/
 .DS_Store
 
 # IntelliJ IDEA
 .idea
 
-# linux
+# Linux
 Makefile
 surge-*.make
 premake-stamp
+cmake-stamp
 /Debug
-src/linux/ScalablePiggy*
 *.deb
 
 # Qt Creator
 *.txt.user
 *.txt.user.*
 
-# cmake
+# CMake
 build/
+build32/
+buildlin/
+buildlin-*/
+buildmac/
+buildwin/
+buildxt/
+build-arm/
+build_lv2
+buildiwyu/
+buildpy/
+cmake-build-*/
+bwd/
+CMakeUserPresets.json
+
+# Reaper
+*.RPP-bak
+
+VERSION_GIT_INFO
+.clang-tidy
+
+# Juce until we add a submodule
+libs/juce-*
+
+# A place for BP to store stuff
+ignore/*
+__pycache__
+minst.sh

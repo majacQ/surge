@@ -1,179 +1,131 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005-2006 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #include "Oscillator.h"
-#include "DspUtilities.h"
+#include "DSPUtils.h"
+#include "FastMath.h"
+#include <cmath>
+
+#include "AliasOscillator.h"
+#include "AudioInputOscillator.h"
+#include "ClassicOscillator.h"
+#include "FM2Oscillator.h"
+#include "FM3Oscillator.h"
+#include "ModernOscillator.h"
+#include "SampleAndHoldOscillator.h"
+#include "SineOscillator.h"
+#include "StringOscillator.h"
+#include "TwistOscillator.h"
+#include "WavetableOscillator.h"
+#include "WindowOscillator.h"
+#include <utility>
 
 using namespace std;
 
-Oscillator*
-spawn_osc(int osctype, SurgeStorage* storage, OscillatorStorage* oscdata, pdata* localcopy)
+Oscillator *spawn_osc(int osctype, SurgeStorage *storage, OscillatorStorage *oscdata,
+                      pdata *localcopy, unsigned char *onto)
 {
-   Oscillator* osc = 0;
-   switch (osctype)
-   {
-   case ot_classic:
-      return new SurgeSuperOscillator(storage, oscdata, localcopy);
-   case ot_wavetable:
-      return new WavetableOscillator(storage, oscdata, localcopy);
-   case ot_WT2:
-      return new WindowOscillator(storage, oscdata, localcopy);
-   case ot_shnoise:
-      return new SampleAndHoldOscillator(storage, oscdata, localcopy);
-   case ot_audioinput:
-      return new osc_audioinput(storage, oscdata, localcopy);
-   case ot_FM:
-      return new FMOscillator(storage, oscdata, localcopy);
-   case ot_FM2:
-      return new FM2Oscillator(storage, oscdata, localcopy);
-   case ot_sinus:
-   default:
-      return new osc_sine(storage, oscdata, localcopy);
-   }
-   return osc;
+    static bool checkSizes = true;
+    if (checkSizes)
+    {
+        size_t mx = 0;
+// #define S(x) std::cout << "sizeof(" << #x << ")=" << sizeof(x) << std::endl; mx = std::max(mx,
+// sizeof(x));
+#define S(x) mx = std::max(mx, sizeof(x));
+        S(ClassicOscillator);
+        S(WavetableOscillator);
+        S(WindowOscillator);
+        S(SineOscillator);
+        S(SampleAndHoldOscillator);
+        S(AudioInputOscillator);
+        S(FM2Oscillator);
+        S(FM3Oscillator);
+        S(ModernOscillator);
+        S(StringOscillator);
+        S(TwistOscillator);
+        S(AliasOscillator);
+
+        checkSizes = false;
+
+        if (mx > oscillator_buffer_size)
+        {
+            /*
+             * If you hit this you have added members to an oscillator type which are bigger than
+             * the static buffer into which we allocate oscillators. Basically at this point you
+             * either want to make your class smaller, make the buffer size bigger, or grab one of
+             * the other devs and ask for help.
+             *
+             * Surge will be so horribly broken in this case and it is a compile time condition that
+             * I decided to just throw an error out of here and crash everything. No way you can
+             * trigger this without changing source so it is safe!
+             */
+            std::cout
+                << "PANIC: Oscillator Buffer Size smaller than max sizeof one oscillator class"
+                << std::endl;
+            throw std::runtime_error("Software Error - Resize class or buffer");
+        }
+    }
+
+    Oscillator *osc = 0;
+    switch (osctype)
+    {
+    case ot_classic:
+        return new (onto) ClassicOscillator(storage, oscdata, localcopy);
+    case ot_wavetable:
+        return new (onto) WavetableOscillator(storage, oscdata, localcopy);
+    case ot_window:
+    {
+        // In the event we are misconfigured, window oscillator will segfault. If you still play
+        // after clicking through 100 warnings, let's just give you a sine
+        if (storage && storage->WindowWT.size == 0)
+            return new (onto) SineOscillator(storage, oscdata, localcopy);
+
+        return new (onto) WindowOscillator(storage, oscdata, localcopy);
+    }
+    case ot_shnoise:
+        return new (onto) SampleAndHoldOscillator(storage, oscdata, localcopy);
+    case ot_audioinput:
+        return new (onto) AudioInputOscillator(storage, oscdata, localcopy);
+    case ot_FM3:
+        return new (onto) FM3Oscillator(storage, oscdata, localcopy);
+    case ot_FM2:
+        return new (onto) FM2Oscillator(storage, oscdata, localcopy);
+    case ot_modern:
+        return new (onto) ModernOscillator(storage, oscdata, localcopy);
+    case ot_string:
+        return new (onto) StringOscillator(storage, oscdata, localcopy);
+    case ot_twist:
+        return new (onto) TwistOscillator(storage, oscdata, localcopy);
+    case ot_alias:
+        return new (onto) AliasOscillator(storage, oscdata, localcopy);
+    case ot_sine:
+    default:
+        return new (onto) SineOscillator(storage, oscdata, localcopy);
+    }
+    return osc;
 }
 
-Oscillator::Oscillator(SurgeStorage* storage, OscillatorStorage* oscdata, pdata* localcopy)
+Oscillator::Oscillator(SurgeStorage *storage, OscillatorStorage *oscdata, pdata *localcopy)
     : master_osc(0)
 {
-   // assert(storage);
-   assert(oscdata);
-   this->storage = storage;
-   this->oscdata = oscdata;
-   this->localcopy = localcopy;
-   ticker = 0;
+    // assert(storage);
+    assert(oscdata);
+    this->storage = storage;
+    this->oscdata = oscdata;
+    this->localcopy = localcopy;
+    ticker = 0;
 }
 
-Oscillator::~Oscillator()
-{}
-
-/* sine osc */
-
-osc_sine::osc_sine(SurgeStorage* storage, OscillatorStorage* oscdata, pdata* localcopy)
-    : Oscillator(storage, oscdata, localcopy)
-{}
-
-void osc_sine::init(float pitch, bool is_display)
-{
-   // phase = oscdata->retrigger.val.b ? ((oscdata->startphase.val.f) * M_PI * 2) : 0.f;
-   phase = 0.f;
-   // m64phase = _mm_set1_pi16(0);
-   // m64phase.m64_i32[0] = 0;
-   sinus.set_phase(phase);
-   driftlfo = 0;
-   driftlfo2 = 0;
-}
-
-osc_sine::~osc_sine()
-{}
-
-void osc_sine::process_block(float pitch, float drift, bool stereo, bool FM, float fmdepth)
-{
-   if (FM)
-   {
-      driftlfo = drift_noise(driftlfo2);
-      double omega = min(M_PI, (double)pitch_to_omega(pitch + drift * driftlfo));
-      FMdepth.newValue(fmdepth);
-
-      for (int k = 0; k < BLOCK_SIZE_OS; k++)
-      {
-         output[k] = sin(phase);
-         phase += omega + master_osc[k] * FMdepth.v;
-         FMdepth.process();
-      }
-   }
-   else
-   {
-      driftlfo = drift_noise(driftlfo2);
-      sinus.set_rate(min(M_PI, (double)pitch_to_omega(pitch + drift * driftlfo)));
-
-      for (int k = 0; k < BLOCK_SIZE_OS; k++)
-      {
-         sinus.process();
-         output[k] = sinus.r;
-
-         // const __m128 scale = _mm_set1_ps(0.000030517578125);
-
-         // HACK for testing sine(__m64)
-         // const __m64 rate = _mm_set1_pi16(0x0040);
-
-         /*m64phase = _mm_add_pi16(m64phase,rate);
-         __m64 a = sine(m64phase);
-         __m128 b = _mm_cvtpi16_ps(a);
-         _mm_store_ss(&output[k],_mm_mul_ss(b,scale));*/
-
-         // int
-         /*m64phase.m64_i32[0] = (m64phase.m64_i32[0] + 0x40);
-         int a = sine(m64phase.m64_i32[0]);
-         __m128 b = _mm_cvtsi32_ss(b,a);
-         _mm_store_ss(&output[k],_mm_mul_ss(b,scale));*/
-      }
-      //_mm_empty(); // HACK MMX
-   }
-   if (stereo)
-   {
-      memcpy(outputR, output, sizeof(float) * BLOCK_SIZE_OS);
-   }
-}
-
-/* audio input osc */
-
-/* add controls:
-input L/R
-gain
-limiter?
-*/
-
-osc_audioinput::osc_audioinput(SurgeStorage* storage, OscillatorStorage* oscdata, pdata* localcopy)
-    : Oscillator(storage, oscdata, localcopy)
-{}
-
-void osc_audioinput::init(float pitch, bool is_display)
-{}
-
-osc_audioinput::~osc_audioinput()
-{}
-
-void osc_audioinput::init_ctrltypes()
-{
-   oscdata->p[0].set_name("Input");
-   oscdata->p[0].set_type(ct_percent_bidirectional);
-   oscdata->p[1].set_name("Gain");
-   oscdata->p[1].set_type(ct_decibel);
-}
-void osc_audioinput::init_default_values()
-{
-   oscdata->p[0].val.f = 0.0f;
-   oscdata->p[1].val.f = 0.0f;
-}
-
-void osc_audioinput::process_block(float pitch, float drift, bool stereo, bool FM, float FMdepth)
-{
-   if (stereo)
-   {
-      float g = db_to_linear(localcopy[oscdata->p[1].param_id_in_scene].f);
-      float inp = limit_range(localcopy[oscdata->p[0].param_id_in_scene].f, -1.f, 1.f);
-
-      float a = g * (1.f - inp);
-      float b = g * (1.f + inp);
-
-      for (int k = 0; k < BLOCK_SIZE_OS; k++)
-      {
-         output[k] = a * storage->audio_in[0][k];
-         outputR[k] = b * storage->audio_in[1][k];
-      }
-   }
-   else
-   {
-      float g = db_to_linear(localcopy[oscdata->p[1].param_id_in_scene].f);
-      float inp = limit_range(localcopy[oscdata->p[0].param_id_in_scene].f, -1.f, 1.f);
-
-      float a = g * (1.f - inp);
-      float b = g * (1.f + inp);
-
-      for (int k = 0; k < BLOCK_SIZE_OS; k++)
-      {
-         output[k] = a * storage->audio_in[0][k] + b * storage->audio_in[1][k];
-      }
-   }
-}
+Oscillator::~Oscillator() {}

@@ -1,6 +1,5 @@
 #include "UserDefaults.h"
-#include "UserInteractions.h"
-
+#include "SurgeStorage.h"
 
 #include <string>
 #include <iostream>
@@ -9,182 +8,318 @@
 #include <sstream>
 #include <fstream>
 
-#if LINUX
-#include <experimental/filesystem>
-#elif MAC || TARGET_RACK
-#include <filesystem.h>
-#else
-#include <filesystem>
-#endif
-
-namespace fs = std::experimental::filesystem;
+#include "filesystem/import.h"
 
 namespace Surge
 {
 namespace Storage
 {
 
-/*
-** These functions and variables are not exported in the header 
-*/
-struct UserDefaultValue
+// This is an odd form but it guarantees a compile error if we miss one
+std::string defaultKeyToString(DefaultKey k)
 {
-    typedef enum ValueType
+    std::string r = "";
+    switch ((DefaultKey)k)
     {
-        ud_string = 1,
-        ud_int = 2
-    } ValueType;
+    case HighPrecisionReadouts:
+        r = "highPrecisionReadouts";
+        break;
+    case SmoothingMode:
+        r = "smoothingMode";
+        break;
+    case PitchSmoothingMode:
+        r = "pitchSmoothingMode";
+        break;
+    case MiddleC:
+        r = "middleC";
+        break;
+    case MPEPitchBendRange:
+        r = "mpePitchBendRange";
+        break;
+    case UseCh2Ch3ToPlayScenesIndividually:
+        r = "useCh2Ch3ToPlayScenesIndividually";
+        break;
+    case RestoreMSEGSnapFromPatch:
+        r = "restoreMSEGSnapFromPatch";
+        break;
+    case UserDataPath:
+        r = "userDataPath";
+        break;
+    case UseODDMTS:
+        r = "useODDMTS";
+        break;
+    case ActivateExtraOutputs:
+        // not used anymore, see GitHub issue #5657
+        r = "activateExtraOutputs";
+        break;
+    case MonoPedalMode:
+        r = "monoPedalMode";
+        break;
+    case ShowCursorWhileEditing:
+        r = "showCursorWhileEditing";
+        break;
+    case TouchMouseMode:
+        r = "touchMouseMode";
+        break;
+    case ShowGhostedLFOWaveReference:
+        r = "showGhostedLFOWaveReference";
+        break;
+    case ShowCPUUsage:
+        r = "showCPUUsage";
+        break;
+    case Use3DWavetableView:
+        r = "use3DWavetableView";
+        break;
+    case DefaultSkin:
+        r = "defaultSkin";
+        break;
+    case DefaultSkinRootType:
+        r = "defaultSkinRootType";
+        break;
+    case DefaultZoom:
+        r = "defaultZoom";
+        break;
+    case SliderMoveRateState:
+        r = "sliderMoveRateState";
+        break;
+    case RememberTabPositionsPerScene:
+        r = "rememberTabPositionsPerScene";
+        break;
+    case PatchJogWraparound:
+        r = "patchJogWraparound";
+        break;
+    case RetainPatchSearchboxAfterLoad:
+        r = "retainPatchSearchboxAfterLoad";
+        break;
+    case OverrideTuningOnPatchLoad:
+        r = "overrideTuningOnPatchLoad";
+        break;
+    case OverrideMappingOnPatchLoad:
+        r = "overrideMappingOnPatchLoad";
+        break;
+    case DefaultPatchAuthor:
+        r = "defaultPatchAuthor";
+        break;
+    case DefaultPatchComment:
+        r = "defaultPatchComment";
+        break;
+    case AppendOriginalPatchBy:
+        r = "appendOriginalPatchBy";
+        break;
+    case ModWindowShowsValues:
+        r = "modWindowShowsValues";
+        break;
+    case LayoutGridResolution:
+        r = "layoutGridResolution";
+        break;
+    case ShowVirtualKeyboard_Plugin:
+        r = "showVirtualKeyboardPlugin";
+        break;
+    case ShowVirtualKeyboard_Standalone:
+        r = "showVirtualKeyboardStandalone";
+        break;
+    case InitialPatchName:
+        r = "initialPatchName";
+        break;
+    case InitialPatchCategory:
+        r = "initialPatchCategory";
+        break;
+    case InitialPatchCategoryType:
+        r = "initialPatchCategoryType";
+        break;
+    case LastSCLPath:
+        r = "lastSCLPath";
+        break;
+    case LastKBMPath:
+        r = "lastKBMPath";
+        break;
+    case LastPatchPath:
+        r = "lastPatchPath";
+        break;
+    case LastWavetablePath:
+        r = "lastWavetablePath";
+        break;
+    // TODO: remove in XT2
+    case TabKeyArmsModulators:
+        r = "tabKeyArmsModulators";
+        break;
+    case UseKeyboardShortcuts_Plugin:
+        r = "useKeyboardShortcutsPlugin";
+        break;
+    case UseKeyboardShortcuts_Standalone:
+        r = "useKeyboardShortcutsStandalone";
+        break;
+    case PromptToActivateShortcutsOnAccKeypress:
+        r = "promptToActivateShortcutsOnAccKeypress";
+        break;
+    case PromptToActivateCategoryAndPatchOnKeypress:
+        r = "promptToActivateCategoryAndPatchOnKeypress";
+        break;
+    case PromptToLoadOverDirtyPatch:
+        r = "promptToLoadOverDirtyPatch";
+        break;
+    case InfoWindowPopupOnIdle:
+        r = "infoWindowPopupOnIdle";
+        break;
+    case TuningOverlayLocation:
+        r = "tuningOverlayLocation";
+        break;
+    case ModlistOverlayLocation:
+        r = "modlistOverlayLocation";
+        break;
+    case MSEGOverlayLocation:
+        r = "msegOverlayLocation";
+        break;
+    case FormulaOverlayLocation:
+        r = "formulaOverlayLocation";
+        break;
+    case WSAnalysisOverlayLocation:
+        r = "wsAnalysisOverlayLocation";
+        break;
+    case FilterAnalysisOverlayLocation:
+        r = "filterAnalysisOverlayLocation";
+        break;
+    case OscilloscopeOverlayLocation:
+        r = "oscilloscopeOverlayLocation";
+        break;
 
-    std::string key; 
-    std::string value;
-    ValueType   type;
-};
+    case TuningOverlayLocationTearOut:
+        r = "tuningOverlayLocationTearOut";
+        break;
+    case ModlistOverlayLocationTearOut:
+        r = "modlistOverlayLocationTearOut";
+        break;
+    case MSEGOverlayLocationTearOut:
+        r = "msegOverlayLocationTearOut";
+        break;
+    case FormulaOverlayLocationTearOut:
+        r = "formulaOverlayLocationTearOut";
+        break;
+    case WSAnalysisOverlayLocationTearOut:
+        r = "wsAnalysisOverlayLocationTearOut";
+        break;
+    case FilterAnalysisOverlayLocationTearOut:
+        r = "filterAnalysisOverlayLocationTearOut";
+        break;
+    case OscilloscopeOverlayLocationTearOut:
+        r = "oscilloscopeOverlayLocationTearOut";
+        break;
 
-std::map<std::string, UserDefaultValue> defaultsFileContents;
-bool haveReadDefaultsFile = false;
+    case TuningOverlaySizeTearOut:
+        r = "tuningOverlaySizeTearOut";
+        break;
+    case ModlistOverlaySizeTearOut:
+        r = "modlistOverlaySizeTearOut";
+        break;
+    case MSEGOverlaySizeTearOut:
+        r = "msegOverlaySizeTearOut";
+        break;
+    case FormulaOverlaySizeTearOut:
+        r = "formulaOverlaySizeTearOut";
+        break;
+    case WSAnalysisOverlaySizeTearOut:
+        r = "wsAnalysisOverlaySizeTearOut";
+        break;
+    case FilterAnalysisOverlaySizeTearOut:
+        r = "filterAnalysisOverlaySizeTearOut";
+        break;
+    case OscilloscopeOverlaySizeTearOut:
+        r = "oscilloscopeOverlaySizeTearOut";
+        break;
 
-std::string defaultsFileName(SurgeStorage *storage)
-{
-    std::string fn = storage->userDataPath + "/SurgeUserDefaults.xml";
-    return fn;
-}
+    case TuningOverlayTearOutAlwaysOnTop:
+        r = "tuningOverlayTearOutAlwaysOnTop";
+        break;
+    case ModlistOverlayTearOutAlwaysOnTop:
+        r = "modlistOverlayTearOutAlwaysOnTop";
+        break;
+    case MSEGOverlayTearOutAlwaysOnTop:
+        r = "msegOverlayTearOutAlwaysOnTop";
+        break;
+    case FormulaOverlayTearOutAlwaysOnTop:
+        r = "formulaOverlayTearOutAlwaysOnTop";
+        break;
+    case WSAnalysisOverlayTearOutAlwaysOnTop:
+        r = "wsAnalysisOverlayTearOutAlwaysOnTop";
+        break;
+    case FilterAnalysisOverlayTearOutAlwaysOnTop:
+        r = "filterAnalysisOverlayTearOutAlwaysOnTop";
+        break;
+    case OscilloscopeOverlayTearOutAlwaysOnTop:
+        r = "oscilloscopeOverlayTearOutAlwaysOnTop";
+        break;
 
-void readDefaultsFile(std::string fn, bool forceRead=false)
-{
-    if (!haveReadDefaultsFile || forceRead)
-    {
-        defaultsFileContents.clear();
+    case ModListValueDisplay:
+        r = "modListValueDisplay";
+        break;
+    case MenuLightness:
+        r = "menuLightness";
+        break;
 
-        TiXmlDocument defaultsLoader;
-        defaultsLoader.LoadFile(fn.c_str());
-        TiXmlElement *e = TINYXML_SAFE_TO_ELEMENT(defaultsLoader.FirstChild("defaults"));
-        if(e)
-        {
-            const char* version = e->Attribute("version");
-            if (strcmp(version, "1") != 0)
-            {
-                std::ostringstream oss;
-                oss << "This version of Surge only reads version 1 defaults. You user defaults version is "
-                    << version << ". Defaults ignored";
-                Surge::UserInteractions::promptError(oss.str(), "Defaults File Version Error");
-                return;
-            }
+    case UseNarratorAnnouncements:
+        r = "useNarratorAnnouncements";
+        break;
+    case UseNarratorAnnouncementsForPatchTypeahead:
+        r = "useNarratorAnnouncementsForPatchTypeahead";
+        break;
 
-            TiXmlElement *def = TINYXML_SAFE_TO_ELEMENT(e->FirstChild("default"));
-            while(def)
-            {
-                UserDefaultValue v;
-                v.key = def->Attribute("key");
-                v.value = def->Attribute("value");
-                int vt;
-                def->Attribute("type", &vt);
-                v.type = (UserDefaultValue::ValueType)vt;
+    case FXUnitAssumeFixedBlock:
+        r = "fxAssumeFixedBlock";
+        break;
+    case FXUnitDefaultZoom:
+        r = "fxUnitDefaultZoom";
+        break;
 
-                defaultsFileContents[v.key] = v;
+    case MenuAndEditKeybindingsFollowKeyboardFocus:
+        r = "menuAndEditKeybindingsFollowKeyboardFocus";
+        break;
 
-                def = TINYXML_SAFE_TO_ELEMENT(def->NextSibling("default"));
-            }
-        }
-        haveReadDefaultsFile = true;
+    case ExpandModMenusWithSubMenus:
+        r = "expandModMenusWithSubmenus";
+        break;
+
+    case nKeys:
+        break;
     }
-}
-
-bool storeUserDefaultValue(SurgeStorage *storage, const std::string &key, const std::string &val, UserDefaultValue::ValueType type)
-{
-    // Re-read the file in case another surge has updated it
-    readDefaultsFile(defaultsFileName(storage), true);
-
-    /*
-    ** Surge has a habit of creating the user directories it needs. 
-    ** See SurgeSytnehsizer::savePatch for instance
-    ** and so we have to do the same here
-    */
-    fs::create_directories(storage->userDataPath);
-
-    
-    UserDefaultValue v;
-    v.key = key;
-    v.value = val;
-    v.type = type;
-
-    defaultsFileContents[v.key] = v;
-
-    /*
-    ** For now, the format of our defaults file is so simple that we don't need to mess
-    ** around with tinyxml to create it, just to parse it
-    */
-    std::ofstream dFile(defaultsFileName(storage));
-    if (!dFile.is_open())
-    {
-        std::ostringstream emsg;
-        emsg << "Unable to open defaults file '" << defaultsFileName(storage) << "' for writing.";
-        Surge::UserInteractions::promptError(emsg.str(), "Defaults Not Saved");
-        return false;
-    }
-        
-    dFile << "<?xml version = \"1.0\" encoding = \"UTF-8\" ?>\n"
-          << "<!-- User Defaults for Surge Synthesizer -->\n"
-          << "<defaults version=\"1\">" << std::endl;
-
-    for (auto &el : defaultsFileContents)
-    {
-        dFile << "  <default key=\"" << el.first << "\" value=\"" << el.second.value << "\" type=\"" << (int)el.second.type << "\"/>\n";
-    }
-
-    dFile << "</defaults>" << std::endl;
-    dFile.close();
-
-    return true;
+    return r;
 }
 
 /*
 ** Functions from the header
-*/    
+*/
 
-std::string getUserDefaultValue(SurgeStorage *storage, const std::string &key, const std::string &valueIfMissing)
+std::string getUserDefaultValue(SurgeStorage *storage, const DefaultKey &key,
+                                const std::string &valueIfMissing)
 {
-    readDefaultsFile(defaultsFileName(storage));
-
-    if (defaultsFileContents.find(key) != defaultsFileContents.end())
-    {
-        auto vStruct = defaultsFileContents[key];
-        if(vStruct.type != UserDefaultValue::ud_string)
-        {
-            return valueIfMissing;
-        }
-        return vStruct.value;
-    }
-   
-    return valueIfMissing;
+    return storage->userDefaultsProvider->getUserDefaultValue(key, valueIfMissing);
 }
 
-int getUserDefaultValue(SurgeStorage *storage, const std::string &key, int valueIfMissing)
+int getUserDefaultValue(SurgeStorage *storage, const DefaultKey &key, int valueIfMissing)
 {
-    readDefaultsFile(defaultsFileName(storage));
-
-    if (defaultsFileContents.find(key) != defaultsFileContents.end())
-    {
-        auto vStruct = defaultsFileContents[key];
-        if(vStruct.type != UserDefaultValue::ud_int)
-        {
-            return valueIfMissing;
-        }
-        return std::stoi(vStruct.value);
-    }
-    return valueIfMissing;
+    return storage->userDefaultsProvider->getUserDefaultValue(key, valueIfMissing);
 }
 
-bool updateUserDefaultValue(SurgeStorage *storage, const std::string &key, const std::string &value)
+std::pair<int, int> getUserDefaultValue(SurgeStorage *storage, const DefaultKey &key,
+                                        const std::pair<int, int> &valueIfMissing)
 {
-    return storeUserDefaultValue(storage, key, value, UserDefaultValue::ud_string);
+    return storage->userDefaultsProvider->getUserDefaultValue(key, valueIfMissing);
 }
 
-bool updateUserDefaultValue(SurgeStorage *storage, const std::string &key, const int value)
+bool updateUserDefaultValue(SurgeStorage *storage, const DefaultKey &key, const std::string &value)
 {
-    std::ostringstream oss;
-    oss << value;
-    return storeUserDefaultValue(storage, key, oss.str(), UserDefaultValue::ud_int);
+    return storage->userDefaultsProvider->updateUserDefaultValue(key, value);
 }
 
+bool updateUserDefaultValue(SurgeStorage *storage, const DefaultKey &key, const int value)
+{
+    return storage->userDefaultsProvider->updateUserDefaultValue(key, value);
 }
+
+bool updateUserDefaultValue(SurgeStorage *storage, const DefaultKey &key,
+                            const std::pair<int, int> &value)
+{
+    return storage->userDefaultsProvider->updateUserDefaultValue(key, value);
 }
+
+} // namespace Storage
+} // namespace Surge
