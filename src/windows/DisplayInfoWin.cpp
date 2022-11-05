@@ -10,7 +10,7 @@ namespace GUI
 {
 
 using namespace VSTGUI;
-    
+
 float getDisplayBackingScaleFactor(CFrame *f)
 {
     /*
@@ -27,20 +27,20 @@ float getDisplayBackingScaleFactor(CFrame *f)
         GetScaleFactorForMonitor(hMon,&pScale);
         // At this point we would convert this painfully to a float with a big switch. But until
         // we implement scalable bitmaps it doesn't matter, so:
-        return 1.0;
+        return 2.0;
     }
 #endif
 
-    return 1.0;
+    return 2.0;
 }
-    
+
 CRect getScreenDimensions(CFrame *)
 {
     RECT desktop;
     const HWND hDesktop = GetDesktopWindow();
     GetWindowRect(hDesktop, &desktop);
-    return CRect(CPoint(0,0), CPoint(desktop.right,desktop.bottom));
+    return CRect(CPoint(0, 0), CPoint(desktop.right, desktop.bottom));
 }
 
-}
-}
+} // namespace GUI
+} // namespace Surge

@@ -1,3 +1,4 @@
+#include "pluginterfaces/base/fplatform.h"
 
 #include "version.h" // for versioning
 
@@ -15,17 +16,11 @@
 
 //------------------------------------------------------------------------
 // called after library was loaded
-bool InitModule()
-{
-   return true;
-}
+bool InitModule() { return true; }
 
 //------------------------------------------------------------------------
 // called after library is unloaded
-bool DeinitModule()
-{
-   return true;
-}
+bool DeinitModule() { return true; }
 
 //------------------------------------------------------------------------
 //  VST Plug-in Entry
@@ -34,7 +29,8 @@ bool DeinitModule()
 // GetPluginFactory function!
 //------------------------------------------------------------------------
 
-BEGIN_FACTORY_DEF("Vember Audio", "http://www.vemberaudio.se", "mailto:info@vemberaudio.se")
+BEGIN_FACTORY_DEF("Surge Synth Team", "http://surge-synthesizer.github.io",
+                  "mailto:no-email@no-email.com")
 
 //---First Plug-in included in this factory-------
 // its kVstAudioEffectClass component
@@ -44,9 +40,9 @@ DEF_CLASS2(INLINE_UID_FROM_FUID(SurgeProcessorUID),
            stringPluginName,           // here the Plug-in name (to be changed)
            0, // Vst::kDistributable,	// means that component and controller could be distributed
               // on different computers
-           "Instrument|Synth", // Subcategory for this Plug-in (to be changed)
-           FULL_VERSION_STR,   // Plug-in version (to be changed)
-           kVstVersionString,  // the VST 3 SDK version (dont changed this, use always this define)
+           "Instrument|Synth",           // Subcategory for this Plug-in (to be changed)
+           Surge::Build::FullVersionStr, // Plug-in version (to be changed)
+           kVstVersionString, // the VST 3 SDK version (dont changed this, use always this define)
            SurgeVst3Processor::createInstance) // function pointer called when this component should
                                                // be instanciated
 
