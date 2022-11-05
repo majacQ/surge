@@ -11,7 +11,6 @@ unsigned int limit_range(unsigned int x, unsigned int low, unsigned int high);
 double limit_range(double x, double low, double high);
 int Float2Int(float x);
 unsigned int Float2UInt(float x);
-int Wrap(int x, int low, int high);
 int Sign(int x);
 
 void hardclip_block(float* x, unsigned int nquads);
@@ -39,6 +38,7 @@ float get_squaremax(float* d, unsigned int nquads);
 float get_absmax_2(float* d1, float* d2, unsigned int nquads);
 void float2i15_block(float*, short*, int);
 void i152float_block(short*, float*, int);
+void i16toi15_block(short*, short*, int);
 
 float sine_ss(unsigned int x);
 int sine(int x);

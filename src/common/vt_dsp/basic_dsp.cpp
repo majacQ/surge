@@ -1,39 +1,15 @@
 #include "basic_dsp.h"
-#include <assert.h>
-#include <math.h>
-#if MAC || LINUX
-#include <algorithm>
-#endif
 
-using namespace std;
+#include <algorithm>
+#include <cmath>
 
 int Min(int a, int b)
 {
-#if _M_X64 || LINUX || TARGET_RACK
-   return min(a, b);
-#else
-   __asm
-   {
-		mov		eax, a
-		mov		ecx, b
-		cmp		eax, ecx
-		cmovg	eax, ecx
-   }
-#endif
+   return std::min(a, b);
 }
 int Max(int a, int b)
 {
-#if _M_X64 || LINUX || TARGET_RACK
-   return max(a, b);
-#else
-   __asm
-   {
-		mov		eax, a
-		mov		ecx, b
-		cmp		eax, ecx
-		cmovl	eax, ecx
-   }
-#endif
+   return std::max(a, b);
 }
 
 double Max(double a, double b)
@@ -50,115 +26,27 @@ double Max(double a, double b)
 
 unsigned int Min(unsigned int a, unsigned int b)
 {
-#if _M_X64 || LINUX || TARGET_RACK
-   return min(a, b);
-#else
-   __asm
-   {
-		mov		eax, a
-		mov		ecx, b
-		cmp		eax, ecx
-		cmova	eax, ecx
-   }
-#endif
+   return std::min(a, b);
 }
 unsigned int Max(unsigned int a, unsigned int b)
 {
-#if _M_X64 || LINUX || TARGET_RACK
-   return max(a, b);
-#else
-   __asm
-   {
-		mov		eax, a
-		mov		ecx, b
-		cmp		eax, ecx
-		cmovb	eax, ecx
-   }
-#endif
+   return std::max(a, b);
 }
 
 int limit_range(int x, int l, int h)
 {
-#if _M_X64 || LINUX || MAC
    return std::max(std::min(x, h), l);
-#else
-   __asm
-   {
-		mov		eax, x
-		mov		edx, l
-		cmp		eax, edx
-		cmovl	eax, edx
-		mov		edx, h
-		cmp		eax, edx
-		cmovg	eax, edx
-   }
-#endif
 }
 
-int Wrap(int x, int L, int H)
-{
-#if _M_X64 || LINUX || TARGET_RACK
-   // don't remember what this was anymore...
-   // int diff = H - L;
-   // if(x > H) x = x-H;
-   assert(0);
-   return 0;
-#else
-   __asm
-   {
-		; load values
-		mov		ecx, H
-		mov		edx, ecx		
-		mov		eax, x
-		; calc diff		
-		sub		edx, L		
-		; prepare wrapped val 1	into ebx
-		mov		ebx, eax
-		sub		ebx, H	
-		; compare with H
-		cmp		eax, ecx
-		cmovg	eax, ebx				
-		; prepare wrapped val 2 into edx	
-		add		edx, eax	
-		; compare with L
-		cmp		eax, L
-		cmovl	eax, edx
-   }
-#endif
-}
 
 int Sign(int x)
 {
-#if _M_X64 || LINUX || TARGET_RACK
    return (x < 0) ? -1 : 1;
-#else
-   __asm
-       {		
-		mov eax, 1
-		mov edx, -1		
-		cmp x, 0
-		cmovle eax, edx
-       }
-   ;
-#endif
 }
 
 unsigned int limit_range(unsigned int x, unsigned int l, unsigned int h)
 {
-#if _M_X64 || LINUX || TARGET_RACK
-   return max(min(x, h), l);
-#else
-   __asm
-   {
-		mov		eax, x		
-		mov		ecx, l	; load min
-		cmp		eax, ecx
-		cmovb	eax, ecx	; move if below
-		mov		ecx, h	; load max
-		cmp		eax, ecx
-		cmova	eax, ecx	; move if above
-   }
-#endif
+   return std::max(std::min(x, h), l);
 }
 /*
 float limit_range(float x, float min, float max)
@@ -179,7 +67,11 @@ double limit_range(double x, double min, double max)
 
 int Float2Int(float x)
 {
+#ifdef ARM_NEON
+   return int(x + 0.5f );
+#else
    return _mm_cvt_ss2si(_mm_load_ss(&x));
+#endif
 }
 
 void float2i15_block(float* f, short* s, int n)
@@ -196,6 +88,15 @@ void i152float_block(short* s, float* f, int n)
    for (int i = 0; i < n; i++)
    {
       f[i] = (float)s[i] * scale;
+   }
+}
+
+
+void i16toi15_block(short* s, short* o, int n)
+{
+   for (int i = 0; i < n; i++)
+   {
+      o[i] = s[i] >> 1;
    }
 }
 
@@ -667,7 +568,7 @@ float sine_ss(unsigned int x) // using 24-bit range as [0..2PI] input
 
    return P * (y * abs(y) - y) + y;   // Q * y + P * y * abs(y)   */
 }
-#if !_M_X64
+#if !_M_X64 && ! defined(ARM_NEON)
 __m64 sine(__m64 x)
 {
    __m64 xabs = _mm_xor_si64(x, _mm_srai_pi16(x, 15));

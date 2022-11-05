@@ -1,19 +1,32 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #pragma once
 #include "vstcontrols.h"
 #include "SurgeStorage.h"
 #include "CDIBitmap.h"
 #include "DspUtilities.h"
+#include "SkinSupport.h"
 
 #define OSC_MOD_ANIMATION 0
 
-class COscillatorDisplay : public VSTGUI::CControl, public VSTGUI::IDropTarget
+class COscillatorDisplay : public VSTGUI::CControl, public Surge::UI::SkinConsumingComponent
 {
 public:
-   COscillatorDisplay(const VSTGUI::CRect& size, OscillatorStorage* oscdata, SurgeStorage* storage)
-       : VSTGUI::CControl(size, 0, 0, 0)
+   COscillatorDisplay(const VSTGUI::CRect& size, VSTGUI::IControlListener *l, OscillatorStorage* oscdata, SurgeStorage* storage)
+       : VSTGUI::CControl(size, l, 0, 0)
    {
       this->oscdata = oscdata;
       this->storage = storage;
@@ -65,39 +78,15 @@ public:
    {
       delete cdisurf;
    }
-   virtual void draw(VSTGUI::CDrawContext* dc);
-   void drawBitmap(VSTGUI::CDrawContext* dc);
-   void drawVector(VSTGUI::CDrawContext* dc);
-
-   virtual VSTGUI::DragOperation onDragEnter(VSTGUI::DragEventData data) override
-   {
-       doingDrag = true;
-       /* invalid();
-          setDirty(true); */
-
-       return VSTGUI::DragOperation::Copy;
-   }
-   virtual VSTGUI::DragOperation onDragMove(VSTGUI::DragEventData data) override
-   {
-       return VSTGUI::DragOperation::Copy;
-   }
-   virtual void onDragLeave(VSTGUI::DragEventData data) override
-   {
-       doingDrag = false;
-       /* invalid();
-          setDirty(true); */
-   }
-   virtual bool onDrop(VSTGUI::DragEventData data) override;
-   
-   virtual VSTGUI::SharedPointer<VSTGUI::IDropTarget> getDropTarget () override { return this; }
+   virtual void draw(VSTGUI::CDrawContext* dc) override;
 
    void loadWavetable(int id);
    void loadWavetableFromFile();
 
    // virtual void mouse (CDrawContext *pContext, VSTGUI::CPoint &where, long button = -1);
-   virtual VSTGUI::CMouseEventResult onMouseDown(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons);
-   virtual VSTGUI::CMouseEventResult onMouseUp(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons);
-   virtual VSTGUI::CMouseEventResult onMouseMoved(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons);
+   virtual VSTGUI::CMouseEventResult onMouseDown(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons) override;
+   virtual VSTGUI::CMouseEventResult onMouseUp(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons) override;
+   virtual VSTGUI::CMouseEventResult onMouseMoved(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons) override;
 
    void invalidateIfIdIsInRange(int id);
    

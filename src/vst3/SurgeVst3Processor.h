@@ -14,6 +14,11 @@ using namespace Steinberg;
 class SurgeGUIEditor;
 class SurgeSynthesizer;
 
+namespace VSTGUI
+{
+	class CBitmap;
+}
+
 // we need public EditController, public IAudioProcessor
 class SurgeVst3Processor : public Steinberg::Vst::SingleComponentEffect,
                            public Steinberg::Vst::IMidiMapping
@@ -108,21 +113,17 @@ public:
    void updateDisplay();
    void setParameterAutomated(int externalparam, float value);
 
-#if WIN_X86
-   // For some undebuggable reason, 32 bit windows doesn't like hte PLUGIN_API
-   // 32 bit vst3 is worth 0 time debugging; this fix makes it work. 
-   virtual tresult beginEdit(Steinberg::Vst::ParamID id);
-   virtual tresult performEdit(Steinberg::Vst::ParamID id,
-                               Steinberg::Vst::ParamValue valueNormalized);
-   virtual tresult endEdit(Steinberg::Vst::ParamID id);
-#else
-   virtual tresult PLUGIN_API beginEdit(Steinberg::Vst::ParamID id);
-   virtual tresult PLUGIN_API performEdit(Steinberg::Vst::ParamID id,
-                               Steinberg::Vst::ParamValue valueNormalized);
-   virtual tresult PLUGIN_API endEdit(Steinberg::Vst::ParamID id);
-#endif
-    
+   tresult beginEdit(Steinberg::Vst::ParamID id) override;
+   tresult performEdit(Steinberg::Vst::ParamID id,
+                       Steinberg::Vst::ParamValue valueNormalized) override;
+   tresult endEdit(Steinberg::Vst::ParamID id) override;
+
+   void uithreadIdleActivity();
+
 protected:
+   bool isFirstLoad = true;
+   void setExtraScaleFactor(VSTGUI::CBitmap *bg, float zf);
+
    void createSurge();
    void destroySurge();
 
@@ -134,17 +135,18 @@ protected:
    std::unique_ptr<SurgeSynthesizer> surgeInstance;
    std::set<SurgeGUIEditor*> viewsSet;
    std::map<int, int> beginEditGuard;
-   int blockpos;
+   int blockpos = 0;
 
-   bool disableZoom;
-   bool haveZoomed = false;
-   int lastZoom = -1;
-   void handleZoom(SurgeGUIEditor *e);
+   float lastZoom = -1;
+   void resize(SurgeGUIEditor *e, int width, int heigth);
+   void redraw(SurgeGUIEditor *e, bool resizeWindow);
    
    FpuState _fpuState;
 
    int midi_controller_0, midi_controller_max;
    const int n_midi_controller_params = 16 * (Steinberg::Vst::ControllerNumbers::kCountCtrlNumber);
+
+   int checkNamesEvery = 0;
    
 public:
    OBJ_METHODS(SurgeVst3Processor, Steinberg::Vst::SingleComponentEffect)

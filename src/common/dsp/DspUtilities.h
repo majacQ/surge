@@ -1,13 +1,27 @@
-//-------------------------------------------------------------------------------------------------------
-//    Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #pragma once
 
 #include <string.h>
 
 #include "globals.h"
+#include "unitconversion.h"
 #include <vt_dsp/basic_dsp.h>
 #include <vt_dsp/halfratefilter.h>
+#include <functional>
 
 #define setzero(x) memset(x, 0, sizeof(*x))
 
@@ -266,11 +280,11 @@ inline float linear_to_amp(float x)
 }
 inline float amp_to_db(float x)
 {
-   return limit_range((float)(6.f * 3.f * log(x) / log(2.f)), -192.f, 96.f);
+   return limit_range((float)(18.f * log2(x)), -192.f, 96.f);
 }
 inline float db_to_amp(float x)
 {
-   return limit_range(powf((10.f / 3.f), 0.05f * x), 0.f, 1.f);
+   return limit_range(powf(2.f, x / 18.f), 0.f, 2.f);
 }
 
 inline double sincf(double x)
@@ -334,6 +348,8 @@ float correlated_noise_mk2(float& lastval, float correlation);
 float drift_noise(float& lastval);
 float correlated_noise_o2(float lastval, float& lastval2, float correlation);
 float correlated_noise_o2mk2(float& lastval, float& lastval2, float correlation);
+// An alternate version where you supply a uniform RNG on -1,1 externally
+float correlated_noise_o2mk2_suppliedrng(float& lastval, float& lastval2, float correlation, std::function<float()> &urng);
 
 inline double hanning(int i, int n)
 {
@@ -353,6 +369,7 @@ inline char* float_to_str(float value, char* str)
 {
    if (!str)
       return 0;
+   Surge::ScopedLocale localGuard;
    sprintf(str, "%f", value);
    return str;
 }

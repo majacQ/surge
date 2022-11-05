@@ -1,22 +1,4 @@
-#include "effect_defs.h"
-
-/* reverb 2			*/
-/* allpass loop design */
-
-enum revparam
-{
-   r2p_predelay = 0,
-   r2p_decay_time,
-   r2p_diffusion,
-   r2p_buildup,
-   r2p_hf_damping,
-   r2p_lf_damping,
-   r2p_modulation,
-   r2p_mix,
-   r2p_width,
-   r2p_room_size,
-   r2p_num_params,
-};
+#include "Reverb2Effect.h"
 
 const float db60 = powf(10.f, 0.05f * -60.f);
 
@@ -111,9 +93,7 @@ void Reverb2Effect::init()
 int msToSamples(float ms, float scale)
 {
    float a = samplerate * ms * 0.001f;
-
    float b = a * scale;
-
    return (int)(b);
 }
 
@@ -168,33 +148,49 @@ void Reverb2Effect::setvars(bool init)
    calc_size(1.f);
 }
 
+void Reverb2Effect::update_rtime()
+{
+   float t = BLOCK_SIZE_INV * (samplerate * (std::max( 1.0f, powf(2.f, *f[rev2_decay_time])) * 2.f + std::max( 0.1f, powf(2.f, *f[rev2_predelay]) *
+                                            (fxdata->p[rev2_predelay].temposync ? storage->temposyncratio_inv : 1.f)) * 2.f)); // * 2.f is to get the db120 time
+   ringout_time = (int)t;
+}
+
 void Reverb2Effect::process(float* dataL, float* dataR)
 {
-   float scale = powf(2.f, 1.f * *f[r2p_room_size]);
+   float scale = powf(2.f, 1.f * *f[rev2_room_size]);
    calc_size(scale);
+
+   if (fabs(*f[rev2_decay_time] - last_decay_time) > 0.001f)
+      update_rtime();
+
+   last_decay_time = *f[rev2_decay_time];
 
    float wetL alignas(16)[BLOCK_SIZE],
          wetR alignas(16)[BLOCK_SIZE];
 
    float loop_time_s = 0.5508 * scale;
-   float decay = powf(db60, loop_time_s / (4.f * (powf(2.f, *f[r2p_decay_time]))));
+   float decay = powf(db60, loop_time_s / (4.f * (powf(2.f, *f[rev2_decay_time]))));
 
    _decay_multiply.newValue(decay);
-   _diffusion.newValue(0.7f * *f[r2p_diffusion]);
-   _buildup.newValue(0.7f * *f[r2p_buildup]);
-   _hf_damp_coefficent.newValue(0.8 * *f[r2p_hf_damping]);
-   _lf_damp_coefficent.newValue(0.008 * *f[r2p_lf_damping]);
-   _modulation.newValue(*f[r2p_modulation] * samplerate * 0.001f * 5.f);
+   _diffusion.newValue(0.7f * *f[rev2_diffusion]);
+   _buildup.newValue(0.7f * *f[rev2_buildup]);
+   _hf_damp_coefficent.newValue(0.8 * *f[rev2_hf_damping]);
+   _lf_damp_coefficent.newValue(0.2 * *f[rev2_lf_damping]);
+   _modulation.newValue(*f[rev2_modulation] * samplerate * 0.001f * 5.f);
 
-   mix.set_target_smoothed(*f[r2p_mix]);
-   width.set_target_smoothed(*f[r2p_width]);
+   width.set_target_smoothed(db_to_linear(*f[rev2_width]));
+   mix.set_target_smoothed(*f[rev2_mix]);
 
    _lfo.set_rate(2.0 * M_PI * powf(2, -2.f) * dsamplerate_inv);
+
+   int pdt = limit_range((int)(samplerate * pow(2.f, *f[rev2_predelay]) * (fxdata->p[rev2_predelay].temposync ? storage->temposyncratio_inv : 1.f)), 1, PREDELAY_BUFFER_SIZE_LIMIT - 1);
 
    for (int k = 0; k < BLOCK_SIZE; k++)
    {
       float in = (dataL[k] + dataR[k]) * 0.5f;
 
+      in = _predelay.process( in, pdt );
+      
       in = _input_allpass[0].process(in, _diffusion.v);
       in = _input_allpass[1].process(in, _diffusion.v);
       in = _input_allpass[2].process(in, _diffusion.v);
@@ -210,6 +206,8 @@ void Reverb2Effect::process(float* dataL, float* dataR)
       lfos[2] = -_lfo.r;
       lfos[3] = -_lfo.i;
 
+      auto hdc = limit_range( _hf_damp_coefficent.v, 0.01f, 0.99f );
+      auto ldc = limit_range( _lf_damp_coefficent.v, 0.01f, 0.99f );
       for (int b = 0; b < NUM_BLOCKS; b++)
       {
          x = x + in;
@@ -218,8 +216,8 @@ void Reverb2Effect::process(float* dataL, float* dataR)
             x = _allpass[b][c].process(x, _buildup.v);
          }
 
-         x = _hf_damper[b].process_lowpass(x, _hf_damp_coefficent.v);
-         x = _lf_damper[b].process_highpass(x, _lf_damp_coefficent.v);
+         x = _hf_damper[b].process_lowpass(x, hdc );
+         x = _lf_damper[b].process_highpass(x, ldc );
 
          int modulation = (int)(_modulation.v * lfos[b] * (float)DELAY_SUBSAMPLE_RANGE);
          float tap_outL = 0.f;
@@ -259,10 +257,32 @@ void Reverb2Effect::suspend()
 
 const char* Reverb2Effect::group_label(int id)
 {
+   switch (id)
+   {
+   case 0:
+      return "Pre-Delay";
+   case 1:
+      return "Reverb";
+   case 2:
+      return "EQ";
+   case 3:
+      return "Output";
+   }
    return 0;
 }
 int Reverb2Effect::group_label_ypos(int id)
 {
+   switch (id)
+   {
+   case 0:
+      return 1;
+   case 1:
+      return 5;
+   case 2:
+      return 17;
+   case 3:
+      return 23;
+   }
    return 0;
 }
 
@@ -270,37 +290,50 @@ void Reverb2Effect::init_ctrltypes()
 {
    Effect::init_ctrltypes();
 
-   fxdata->p[r2p_predelay].set_name("Pre-Delay");
-   fxdata->p[r2p_predelay].set_type(ct_envtime);
-   fxdata->p[r2p_decay_time].set_name("Reverb Time");
-   fxdata->p[r2p_decay_time].set_type(ct_reverbtime);
-   fxdata->p[r2p_diffusion].set_name("Diffusion");
-   fxdata->p[r2p_diffusion].set_type(ct_percent);
-   fxdata->p[r2p_buildup].set_name("Buildup");
-   fxdata->p[r2p_buildup].set_type(ct_percent);
-   fxdata->p[r2p_modulation].set_name("Modulation");
-   fxdata->p[r2p_modulation].set_type(ct_percent);
-   fxdata->p[r2p_hf_damping].set_name("HF Damp");
-   fxdata->p[r2p_hf_damping].set_type(ct_percent);
-   fxdata->p[r2p_lf_damping].set_name("LF Damp");
-   fxdata->p[r2p_lf_damping].set_type(ct_percent);
-   fxdata->p[r2p_mix].set_name("Mix");
-   fxdata->p[r2p_mix].set_type(ct_percent);
-   fxdata->p[r2p_width].set_name("Width");
-   fxdata->p[r2p_width].set_type(ct_percent);
-   fxdata->p[r2p_room_size].set_name("Room Size");
-   fxdata->p[r2p_room_size].set_type(ct_percent_bidirectional);
+   fxdata->p[rev2_predelay].set_name("Pre-Delay");
+   fxdata->p[rev2_predelay].set_type(ct_reverbpredelaytime);
+
+   fxdata->p[rev2_room_size].set_name("Room Size");
+   fxdata->p[rev2_room_size].set_type(ct_percent_bidirectional);
+   fxdata->p[rev2_decay_time].set_name("Decay Time");
+   fxdata->p[rev2_decay_time].set_type(ct_reverbtime);
+   fxdata->p[rev2_diffusion].set_name("Diffusion");
+   fxdata->p[rev2_diffusion].set_type(ct_percent);
+   fxdata->p[rev2_buildup].set_name("Buildup");
+   fxdata->p[rev2_buildup].set_type(ct_percent);
+   fxdata->p[rev2_modulation].set_name("Modulation");
+   fxdata->p[rev2_modulation].set_type(ct_percent);
+
+   fxdata->p[rev2_hf_damping].set_name("HF Damping");
+   fxdata->p[rev2_hf_damping].set_type(ct_percent);
+   fxdata->p[rev2_lf_damping].set_name("LF Damping");
+   fxdata->p[rev2_lf_damping].set_type(ct_percent);
+
+   fxdata->p[rev2_width].set_name("Width");
+   fxdata->p[rev2_width].set_type(ct_decibel_narrow);
+   fxdata->p[rev2_mix].set_name("Mix");
+   fxdata->p[rev2_mix].set_type(ct_percent);
+
+   for( int i=rev2_predelay; i<rev2_num_params; ++i )
+   {
+      auto a = 1;
+      if( i >= rev2_room_size ) a += 2;
+      if( i >= rev2_lf_damping ) a += 2;
+      if( i >= rev2_width ) a += 2;
+      fxdata->p[i].posy_offset = a;
+   }
 }
 
 void Reverb2Effect::init_default_values()
 {
-   fxdata->p[r2p_predelay].val.f = -4.f;
-   fxdata->p[r2p_decay_time].val.f = 0.75f;
-   fxdata->p[r2p_mix].val.f = 0.33f;
-   fxdata->p[r2p_width].val.f = 0.75f;
-   fxdata->p[r2p_diffusion].val.f = 1.0f;
-   fxdata->p[r2p_buildup].val.f = 1.0f;
-   fxdata->p[r2p_modulation].val.f = 0.5f;
-   fxdata->p[r2p_hf_damping].val.f = 0.2f;
-   fxdata->p[r2p_room_size].val.f = 0.f;
+   fxdata->p[rev2_predelay].val.f = -4.f;
+   fxdata->p[rev2_decay_time].val.f = 0.75f;
+   fxdata->p[rev2_mix].val.f = 0.33f;
+   fxdata->p[rev2_width].val.f = 0.0f;
+   fxdata->p[rev2_diffusion].val.f = 1.0f;
+   fxdata->p[rev2_buildup].val.f = 1.0f;
+   fxdata->p[rev2_modulation].val.f = 0.5f;
+   fxdata->p[rev2_hf_damping].val.f = 0.2f;
+   fxdata->p[rev2_lf_damping].val.f = 0.2f;
+   fxdata->p[rev2_room_size].val.f = 0.f;
 }

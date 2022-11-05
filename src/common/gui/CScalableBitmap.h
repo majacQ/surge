@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <map>
+#include <atomic>
 
 #include "nanosvg.h"
 
@@ -16,11 +17,19 @@ class CScalableBitmap : public VSTGUI::CBitmap
 {
 public:
    CScalableBitmap(VSTGUI::CResourceDescription d, VSTGUI::CFrame* f);
+   CScalableBitmap(std::string fname, VSTGUI::CFrame* f);
+   ~CScalableBitmap();
 
    virtual void draw(VSTGUI::CDrawContext* context,
                      const VSTGUI::CRect& rect,
                      const VSTGUI::CPoint& offset,
                      float alpha);
+
+   /*
+    * CSBMs can pick PNGs at different zoom levels
+    */
+   virtual void addPNGForZoomLevel( std::string fname, int zoomLevel );
+   virtual void resolvePNGForZoomLevel(int zoomLevel);
 
    /*
    ** The 'zoom factor' is set statically across all bitmaps since it is a
@@ -47,6 +56,20 @@ public:
       extraScaleFactor = a;
    }
 
+   void clearOffscreenCaches()
+   {
+      for (auto const& pair : offscreenCache)
+      {
+         auto val = pair.second;
+         if (val)
+            val->forget();
+      }
+      offscreenCache.clear();
+   }
+
+   int resourceID;
+   std::string fname;
+
 private:
    struct CPointCompare
    {
@@ -59,10 +82,11 @@ private:
    };
 
    std::map<VSTGUI::CPoint, VSTGUI::CBitmap*, CPointCompare> offscreenCache;
+   static std::atomic<int> instances;
 
+   
    int lastSeenZoom, bestFitScaleGroup;
    int extraScaleFactor;
-   int resourceID;
 
    VSTGUI::CFrame* frame;
 
@@ -72,6 +96,12 @@ private:
                 const VSTGUI::CPoint& offset,
                 float alpha);
    VSTGUI::CColor svgColorToCColor(int svgColor, float opacity = 1.0);
+
+   /*
+    * The zoom 100 bitmap and optional higher resolution bitmaps for zooms
+    * map vs unordered is on purpose here - we need this ordered for our zoom search
+    */
+   std::map<int, std::pair<std::string, std::unique_ptr<VSTGUI::CBitmap>>> pngZooms;
 
    int currentPhysicalZoomFactor;
 };

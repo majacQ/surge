@@ -1,6 +1,18 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #pragma once
 
 #include "public.sdk/source/vst2.x/audioeffectx.h"
@@ -8,6 +20,11 @@
 #include <util/FpuState.h>
 
 class SurgeGUIEditor;
+
+namespace VSTGUI
+{
+	class CBitmap;
+}
 
 //-------------------------------------------------------------------------------------------------------
 class Vst2PluginInstance : public AudioEffectX
@@ -90,7 +107,8 @@ protected:
    int oldblokkosize;
    int blockpos;
 
-   void handleZoom(SurgeGUIEditor *e);
+   void redraw(SurgeGUIEditor *e, bool resizeWindow);
+   void setExtraScaleFactor(VSTGUI::CBitmap *bg, float zf);
    
 public:
    enum State {
@@ -109,5 +127,8 @@ public:
    int input_connected;
    FpuState _fpuState;
 
+   int checkNamesEvery = 0;
+   bool isFruity = false;
+   
    bool tryInit();
 };

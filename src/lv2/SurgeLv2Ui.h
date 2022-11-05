@@ -7,6 +7,11 @@ class SurgeLv2Wrapper;
 class SurgeGUIEditor;
 class Lv2IdleRunLoop;
 
+namespace VSTGUI
+{
+   class CBitmap;
+}
+
 class SurgeLv2Ui
 {
 public:
@@ -17,7 +22,8 @@ public:
                        const LV2_URID_Map* uridMapper,
                        const LV2UI_Resize* uiResizer,
                        LV2UI_Write_Function writeFn,
-                       LV2UI_Controller controller);
+                       LV2UI_Controller controller,
+                       float uiScaleFactor);
    ~SurgeLv2Ui();
 
    void setParameterAutomated(int externalparam, float value);
@@ -43,8 +49,9 @@ private:
    static const void* extensionData(const char* uri);
    static int uiIdle(LV2UI_Handle ui);
 
-    // callback from the editor
-    void handleZoom(SurgeGUIEditor* e, const LV2UI_Resize* resizer);
+   // callback from the editor
+   void handleZoom(SurgeGUIEditor* e, const LV2UI_Resize* resizer, bool resizeWindow);
+   void setExtraScaleFactor(VSTGUI::CBitmap *bg, float zf);
 
 private:
    std::unique_ptr<SurgeGUIEditor> _editor;
@@ -54,4 +61,6 @@ private:
 #endif
    LV2UI_Write_Function _writeFn;
    LV2UI_Controller _controller;
+   float _uiScaleFactor;
+   bool _uiInitialized;
 };

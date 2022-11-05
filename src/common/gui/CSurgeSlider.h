@@ -1,12 +1,26 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #pragma once
 #include "vstcontrols.h"
 #include "SurgeBitmaps.h"
 #include "SurgeParamConfig.h"
+#include "SkinSupport.h"
+#include "CursorControlGuard.h"
 
-class CSurgeSlider : public CCursorHidingControl
+class CSurgeSlider : public VSTGUI::CControl, public Surge::UI::CursorControlAdapterWithMouseDelta<CSurgeSlider>, public Surge::UI::SkinConsumingComponent
 {
 public:
    CSurgeSlider(const VSTGUI::CPoint& loc,
@@ -14,25 +28,34 @@ public:
                 VSTGUI::IControlListener* listener,
                 long tag,
                 bool is_mod,
-                std::shared_ptr<SurgeBitmaps> bitmapStore);
+                std::shared_ptr<SurgeBitmaps> bitmapStore,
+                SurgeStorage* storage = nullptr);
    ~CSurgeSlider();
-   virtual void draw(VSTGUI::CDrawContext*);
+   virtual void draw(VSTGUI::CDrawContext*) override;
    // virtual void mouse (VSTGUI::CDrawContext *pContext, VSTGUI::CPoint &where, long buttons = -1);
    // virtual bool onWheel (VSTGUI::CDrawContext *pContext, const VSTGUI::CPoint &where, float distance);
    virtual bool 
-   onWheel(const VSTGUI::CPoint& where, const float &distane, const VSTGUI::CButtonState& buttons);
+   onWheel(const VSTGUI::CPoint& where, const float &distane, const VSTGUI::CButtonState& buttons) override;
 
    virtual VSTGUI::CMouseEventResult
    onMouseDown(VSTGUI::CPoint& where,
-               const VSTGUI::CButtonState& buttons); ///< called when a mouse down event occurs
+               const VSTGUI::CButtonState& buttons) override; ///< called when a mouse down event occurs
    virtual VSTGUI::CMouseEventResult
-   onMouseUp(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons); ///< called when a mouse up event occurs
+   onMouseUp(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons) override; ///< called when a mouse up event occurs
 
+   virtual VSTGUI::CMouseEventResult
+   onMouseEntered(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons) override;
+   
    virtual VSTGUI::CMouseEventResult
    onMouseExited(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons) override;
    
-   virtual double getMouseDeltaScaling(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons);
-   virtual void onMouseMoveDelta(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons, double dx, double dy);
+   virtual double getMouseDeltaScaling(const VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons);
+   virtual VSTGUI::CMouseEventResult onMouseMoved(VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons) override
+   {
+      return onMouseMovedCursorHelper(where, buttons);
+   }
+
+   virtual void onMouseMoveDelta(const VSTGUI::CPoint& where, const VSTGUI::CButtonState& buttons, double dx, double dy);
 
    virtual void setLabel(const char* txt);
    virtual void setModValue(float val);
@@ -62,31 +85,49 @@ public:
 
    virtual bool isInMouseInteraction();
 
-   virtual void setValue(float val);
+   virtual void setValue(float val) override;
    virtual void setBipolar(bool);
 
    virtual void setTempoSync( bool b ) { is_temposync = b; }
    
    void SetQuantitizedDispValue(float f);
 
+   void setFont( VSTGUI::CFontRef f ) {
+      if( labfont ) labfont->forget();
+      labfont = f;
+      labfont->remember();
+   }
+   VSTGUI::CFontRef labfont = nullptr;
+
    CLASS_METHODS(CSurgeSlider, CControl)
 
+   bool in_hover = false;
    bool is_mod;
-   bool disabled;
-
+   bool disabled; // means it can't be used unless something else changes
+   bool deactivated; // means it has been turned off by user action
+   bool hasBeenDraggedDuringMouseGesture = false;
+   
+   bool isStepped = false;
+   int intRange = 0;
+   
+   SurgeStorage* storage = nullptr;
+   
    enum MoveRateState
    {
       kUnInitialized = 0,
-      kClassic,
+      kLegacy,
       kSlow,
       kMedium,
       kExact
    };
 
+   virtual void onSkinChanged() override;
+   
    static MoveRateState sliderMoveRateState;
 
 private:
-   VSTGUI::CBitmap *pHandle, *pTray, *pModHandle;
+   VSTGUI::CBitmap *pHandle = nullptr, *pTray = nullptr,
+      *pModHandle = nullptr, *pTempoSyncHandle = nullptr, *pHandleHover = nullptr, *pTempoSyncHoverHandle = nullptr;
    VSTGUI::CRect handle_rect, handle_rect_orig;
    VSTGUI::CPoint offsetHandle;
    int range;
@@ -95,12 +136,14 @@ private:
    float modval, qdvalue;
    char label[256], leftlabel[256];
    int modmode;
-   float moverate, statezoom;
+   float moverate;
    int typex, typey;
    int typehx, typehy;
    bool has_modulation, has_modulation_current, modulation_is_bipolar = false;
    bool is_temposync = false;
-   VSTGUI::CPoint lastpoint, sourcepoint;
+   VSTGUI::CPoint draghandlecenter;
+   VSTGUI::CPoint startPosition;
+   VSTGUI::CPoint currentPosition;
    float oldVal, *edit_value;
    int drawcount_debug;
 

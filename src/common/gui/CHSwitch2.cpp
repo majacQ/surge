@@ -1,8 +1,23 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #include "CHSwitch2.h"
 #include <vt_dsp/basic_dsp.h>
+#include "CScalableBitmap.h"
+#include "DebugHelpers.h"
+#include "SurgeBitmaps.h"
 
 using namespace VSTGUI;
 
@@ -12,24 +27,93 @@ void CHSwitch2::draw(CDrawContext* dc)
    {
       // source position in bitmap
       CPoint where(0, heightOfOneImage *
-                          (long)(imgoffset + ((value * (float)(rows * columns - 1) + 0.5f))));
+                          (long)(frameOffset + ((value * (float)(rows * columns - 1) + 0.5f))));
       getBackground()->draw(dc, getViewSize(), where, 0xff);
+
+      if( ! lookedForHover && skin.get() )
+      {
+         lookedForHover = true;
+         auto hoverprop = ((skin && skinControl) ? skin->propertyValue(skinControl, "hover_image")
+                                                 : Surge::Maybe<std::string>());
+         auto hoveronprop =
+             ((skin && skinControl) ? skin->propertyValue(skinControl, "hover_on_image")
+                                    : Surge::Maybe<std::string>());
+
+         if (hoverprop.isNothing())
+         {
+            hoverBmp = skin->hoverBitmapOverlayForBackgroundBitmap(
+                skinControl, dynamic_cast<CScalableBitmap*>(getBackground()), associatedBitmapStore,
+                Surge::UI::Skin::HoverType::HOVER);
+         }
+         else
+         {
+            hoverBmp = associatedBitmapStore->getBitmapByStringID(hoverprop.fromJust());
+         }
+
+         if (hoveronprop.isNothing())
+         {
+            hoverOnBmp = skin->hoverBitmapOverlayForBackgroundBitmap(
+                skinControl, dynamic_cast<CScalableBitmap*>(getBackground()), associatedBitmapStore,
+                Surge::UI::Skin::HoverType::HOVER_OVER_ON);
+         }
+         else
+         {
+            hoverOnBmp = associatedBitmapStore->getBitmapByStringID(hoveronprop.fromJust());
+         }
+      }
+
+      long vv = (long)(frameOffset + ((value * (float)(rows * columns - 1) + 0.5f)));
+      long hv = (long)(frameOffset + ((hoverValue * (float)(rows * columns - 1) + 0.5f)));
+      if( doingHover && hoverOnBmp && vv == hv )
+      {
+         CPoint hwhere(0, heightOfOneImage *
+                       (long)(frameOffset + ((hoverValue * (float)(rows * columns - 1) + 0.5f))));
+         
+         hoverOnBmp->draw(dc, getViewSize(), hwhere, 0xff);
+      }
+      else if( hoverBmp && doingHover )
+      {
+         CPoint hwhere(0, heightOfOneImage *
+                      (long)(frameOffset + ((hoverValue * (float)(rows * columns - 1) + 0.5f))));
+         
+         hoverBmp->draw(dc, getViewSize(), hwhere, 0xff);
+      }
    }
    setDirty(false);
 }
 
 CMouseEventResult CHSwitch2::onMouseDown(CPoint& where, const CButtonState& buttons)
 {
+   /*
+   ** If we have two mousedowns without an up, skip stuff. This means pressing left/right on
+   ** win doesn't confuse us. BUT if we return kMouseDownEventHandledButDontNeedMovedOrUpEvents
+   ** we won't ever get the up so this counter will be in trouble. That's why we have --s scattered
+   ** throughout this code
+   */
+   mouseDowns++;
+   if (mouseDowns > 1)
+      return kMouseEventHandled;
+
+   if (listener && (buttons & (kMButton | kButton4 | kButton5)))
+   {
+      listener->controlModifierClicked(this, buttons);
+      mouseDowns--;
+      return kMouseDownEventHandledButDontNeedMovedOrUpEvents;
+   }
+
    if (listener && buttons & (kAlt | kShift | kRButton | kControl | kApple))
    {
       if (listener->controlModifierClicked(this, buttons) != 0)
+      {
+         mouseDowns--;
          return kMouseDownEventHandledButDontNeedMovedOrUpEvents;
+      }
    }
 
    if (!(buttons & kLButton))
       return kMouseEventNotHandled;
 
-   if (!dragable)
+   if (!draggable)
    {
       auto mouseableArea = getMouseableArea();
       beginEdit();
@@ -55,28 +139,35 @@ CMouseEventResult CHSwitch2::onMouseDown(CPoint& where, const CButtonState& butt
 
       endEdit();
 
+      mouseDowns--;
       return kMouseDownEventHandledButDontNeedMovedOrUpEvents;
    }
    else
    {
-      beginEdit();
-      return onMouseMoved(where, buttons);
+      auto res = onMouseMoved(where, buttons);
+      if( res == kMouseDownEventHandledButDontNeedMovedOrUpEvents )
+         mouseDowns --;
+      return res;
    }
-
-   return kMouseEventNotHandled;
 }
 CMouseEventResult CHSwitch2::onMouseUp(CPoint& where, const CButtonState& buttons)
 {
-   if (dragable)
+   mouseDowns--;
+
+   if (draggable)
    {
-      endEdit();
       return kMouseEventHandled;
    }
    return kMouseEventNotHandled;
 }
 CMouseEventResult CHSwitch2::onMouseMoved(CPoint& where, const CButtonState& buttons)
 {
-   if (dragable && ( buttons.getButtonState() ))
+   if( doingHover )
+   {
+      calculateHoverValue( where );
+   }
+
+   if (draggable && ( buttons.getButtonState() ))
    {
       auto mouseableArea = getMouseableArea();
       double coefX, coefY;
@@ -100,12 +191,42 @@ CMouseEventResult CHSwitch2::onMouseMoved(CPoint& where, const CButtonState& but
       }
 
       invalid();
+      beginEdit();
       if (listener)
          listener->valueChanged(this);
-
+      endEdit();
       return kMouseEventHandled;
    }
+
    return kMouseEventNotHandled;
+}
+
+void CHSwitch2::calculateHoverValue(const CPoint &where )
+{
+   auto mouseableArea = getMouseableArea();
+   double coefX, coefY;
+   coefX = (double)mouseableArea.getWidth() / (double)columns;
+   coefY = (double)mouseableArea.getHeight() / (double)rows;
+   
+   int y = (int)((where.y - mouseableArea.top) / coefY);
+   int x = (int)((where.x - mouseableArea.left) / coefX);
+   
+   x = limit_range(x, 0, columns - 1);
+   y = limit_range(y, 0, rows - 1);
+   
+   if (columns * rows > 1)
+   {
+      float nhoverValue = (float)(x + y * columns) / (float)(columns * rows - 1);
+      
+      nhoverValue = limit_range( nhoverValue, 0.f, 1.f );
+
+      
+      if( nhoverValue != hoverValue )
+      {
+         hoverValue = nhoverValue;
+         invalid();
+      }
+   }
 }
 bool CHSwitch2::onWheel(const CPoint& where, const float& distance, const CButtonState& buttons)
 {

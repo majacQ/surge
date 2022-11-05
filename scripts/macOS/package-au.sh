@@ -1,23 +1,20 @@
 #!/bin/bash          
 
-# If no vectors are specified, use the original-vector by default
-if [[ -z "$SURGE_USE_VECTOR_SKIN" ]]; then
-    SURGE_USE_VECTOR_SKIN=original-vector
-fi
+set -euo pipefail
 
+# If no vectors are specified, use the original-vector by default
 # input config
 RES_SRC_LOCATION="resources"
 PACKAGE_SRC_LOCATION="$RES_SRC_LOCATION/osx-au"
 
 FONT_SRC_LOCATION="$RES_SRC_LOCATION/fonts"
-SVG_SRC_LOCATION="assets/${SURGE_USE_VECTOR_SKIN}/SVG/exported"
+SVG_SRC_LOCATION="assets/SurgeClassic/exported"
 
 BUNDLE_RES_SRC_LOCATION="$RES_SRC_LOCATION/osx-resources"
-EXEC_LOCATION="target/au/Release/Surge.dylib"
-#EXEC_LOCATION="target/au/Debug/Surge-Debug.dylib"
+EXEC_LOCATION="$1"
 
 # output configs
-OUTPUT_DIR=products
+OUTPUT_DIR="$2"
 BUNDLE_NAME="Surge.component"
 BUNDLE_DIR="$OUTPUT_DIR/$BUNDLE_NAME"
 EXEC_TARGET_NAME="Surge"

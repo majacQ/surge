@@ -1,6 +1,18 @@
-//-------------------------------------------------------------------------------------------------------
-//	Copyright 2005 Claes Johanson & Vember Audio
-//-------------------------------------------------------------------------------------------------------
+/*
+** Surge Synthesizer is Free and Open Source Software
+**
+** Surge is made available under the Gnu General Public License, v3.0
+** https://www.gnu.org/licenses/gpl-3.0.en.html
+**
+** Copyright 2004-2020 by various individuals as described by the Git transaction log
+**
+** All source at: https://github.com/surge-synthesizer/surge.git
+**
+** Surge was a commercial product from 2004-2018, with Copyright and ownership
+** in that period held by Claes Johanson at Vember Audio. Claes made Surge
+** open source in September 2018.
+*/
+
 #include "globals.h"
 #include "Vst2PluginInstance.h"
 #include "SurgeSynthesizer.h"
@@ -10,11 +22,13 @@
 #include <float.h>
 #include "public.sdk/source/vst2.x/aeffeditor.h"
 #include "public.sdk/source/vst2.x/audioeffectx.h"
+#include "version.h"
 
 #if MAC
 #include <fenv.h>
 #include <AvailabilityMacros.h>
-#pragma STDC FENV_ACCESS on
+#elif WINDOWS
+#include <windows.h>
 #endif
 
 using namespace std;
@@ -38,19 +52,21 @@ Vst2PluginInstance::Vst2PluginInstance(audioMasterCallback audioMaster)
     : AudioEffectX(audioMaster, 1, n_total_params + n_customcontrollers)
 {
    setNumInputs(2);  // stereo in
-   setNumOutputs(2); // stereo out
+   setNumOutputs(6); // stereo out, scene A out, scene B out
 
+   checkNamesEvery = 0;
+   
 #if MAC || LINUX
    isSynth();
    plug_is_synth = true;
    setUniqueID('cjs3'); // identify
 #else
-   char path[1024];
+   WCHAR path[MAX_PATH];
    extern void* hInstance;
-   GetModuleFileName((HMODULE)hInstance, path, 1024);
-   _strlwr(path);
+   GetModuleFileName((HMODULE)hInstance, path, std::size(path));
+   _wcslwr(path);
 
-   if (strstr(path, "_fx") || strstr(path, "_FX"))
+   if (wcsstr(path, L"_fx"))
    {
       plug_is_synth = false;
       setUniqueID('cjsx'); // identify
@@ -94,6 +110,11 @@ void Vst2PluginInstance::inputConnected(VstInt32 index, bool state)
 
 Vst2PluginInstance::~Vst2PluginInstance()
 {
+   if( editor )
+   {
+      delete editor;
+      editor = nullptr;
+   }
    delete _instance;
 }
 
@@ -187,7 +208,7 @@ VstInt32 Vst2PluginInstance::canDo(char* text)
    if (!strcmp(text, "midiProgramNames"))
       return -1;
 
-   if (!strcmp(text, "2in2out"))
+   if (!strcmp(text, "2in6out"))
       return 1;
 
    if (!strcmp(text, "plugAsChannelInsert"))
@@ -316,7 +337,9 @@ void Vst2PluginInstance::setParameter(VstInt32 index, float value)
    if (!tryInit())
       return;
 
-   _instance->setParameter01(_instance->remapExternalApiToInternalId(index), value, true);
+   SurgeSynthesizer::ID did;
+   if( _instance->fromDAWSideIndex(index, did ))
+      _instance->setParameter01(did, value, true);
 
    // flyttat till sub3_synth
    /*if(editor)
@@ -331,7 +354,11 @@ float Vst2PluginInstance::getParameter(VstInt32 index)
    if (!tryInit())
       return 0;
 
-   return _instance->getParameter01(_instance->remapExternalApiToInternalId(index));
+   SurgeSynthesizer::ID did;
+   if( _instance->fromDAWSideIndex(index, did ))
+      return _instance->getParameter01(did);
+
+   return 0;
 }
 
 void Vst2PluginInstance::getParameterName(VstInt32 index, char* label)
@@ -339,7 +366,10 @@ void Vst2PluginInstance::getParameterName(VstInt32 index, char* label)
    if (!tryInit())
       return;
 
-   _instance->getParameterName(_instance->remapExternalApiToInternalId(index), label);
+   label[0] = 0;
+   SurgeSynthesizer::ID did;
+   if( _instance->fromDAWSideIndex(index, did ))
+      _instance->getParameterName(did, label);
 }
 
 void Vst2PluginInstance::getParameterDisplay(VstInt32 index, char* text)
@@ -347,7 +377,10 @@ void Vst2PluginInstance::getParameterDisplay(VstInt32 index, char* text)
    if (!tryInit())
       return;
 
-   _instance->getParameterDisplay(_instance->remapExternalApiToInternalId(index), text);
+   text[0] = 0;
+   SurgeSynthesizer::ID did;
+   if( _instance->fromDAWSideIndex(index, did ))
+      _instance->getParameterDisplay(did, text);
 }
 
 void Vst2PluginInstance::getParameterLabel(VstInt32 index, char* label)
@@ -369,7 +402,10 @@ bool Vst2PluginInstance::getProductString(char* name)
 
 bool Vst2PluginInstance::getVendorString(char* text)
 {
-   strcpy(text, "Vember Audio");
+   if( isFruity )
+      strcpy(text, "Open Source Surge Synth Team");
+   else
+      strcpy(text, "Surge Synth Team");
    return true;
 }
 
@@ -384,25 +420,42 @@ void Vst2PluginInstance::processT(float** inputs, float** outputs, VstInt32 samp
    SurgeSynthesizer* s = (SurgeSynthesizer*)_instance;
    s->process_input = (!plug_is_synth || input_connected);
 
+
+   checkNamesEvery++;
+   if( checkNamesEvery * 2 * sampleFrames >= dsamplerate ) // every half second
+   {
+      checkNamesEvery = 0;
+      if( std::atomic_exchange( &parameterNameUpdated, false ) )
+      {
+         if( ! isFruity )
+            updateDisplay();
+      }
+   }
+
    // do each buffer
-   VstTimeInfo* timeinfo = getTimeInfo(kVstPpqPosValid | kVstTempoValid | kVstTransportPlaying);
+   VstTimeInfo* timeinfo = getTimeInfo(kVstTransportChanged | kVstTempoValid | kVstTransportPlaying | kVstPpqPosValid );
    if (timeinfo)
    {
       if (timeinfo->flags & kVstTempoValid)
          _instance->time_data.tempo = timeinfo->tempo;
-      if (timeinfo->flags & kVstTransportPlaying)
+      if (timeinfo->flags & kVstTransportPlaying || timeinfo->flags & kVstTransportChanged )
       {
          if (timeinfo->flags & kVstPpqPosValid)
+         {
             _instance->time_data.ppqPos = timeinfo->ppqPos;
+         }
       }
+
       if (timeinfo->flags & kVstTimeSigValid )
       {
          _instance->time_data.timeSigNumerator = timeinfo->timeSigNumerator;
          _instance->time_data.timeSigDenominator = timeinfo->timeSigDenominator;
       }
+      _instance->resetStateFromTimeData();
    }
    else
    {
+      std::cout << "TIMEPOS IS UNKNOWABLE" << std::endl;
       _instance->time_data.tempo = 120;
    }
 
@@ -447,9 +500,28 @@ void Vst2PluginInstance::processT(float** inputs, float** outputs, VstInt32 samp
       for (outp = 0; outp < n_outputs; outp++)
       {
          if (replacing)
-            outputs[outp][i] = (float)_instance->output[outp][blockpos]; // replacing
-         else
-            outputs[outp][i] += (float)_instance->output[outp][blockpos]; // adding
+         {
+            outputs[outp][i] = (float)_instance->output[outp][blockpos];
+            if( _instance->activateExtraOutputs )
+            {
+               outputs[2 + outp][i] = (float)_instance->sceneout[0][outp][blockpos];
+               outputs[4 + outp][i] = (float)_instance->sceneout[1][outp][blockpos];
+            }
+            else
+            {
+               outputs[2 + outp][i] = 0.f;
+               outputs[4 + outp][i] = 0.f;
+            }
+
+         }
+         else  // adding
+         {
+            outputs[outp][i] += (float)_instance->output[outp][blockpos]; 
+            if( _instance->activateExtraOutputs ) {
+               outputs[2 + outp][i] += (float)_instance->sceneout[0][outp][blockpos];
+               outputs[4 + outp][i] += (float)_instance->sceneout[1][outp][blockpos];
+            } // adding 0 is the same as doing nothing so no else here
+         }
       }
 
       blockpos++;
@@ -479,9 +551,29 @@ void Vst2PluginInstance::processReplacing(float** inputs, float** outputs, VstIn
 
 bool Vst2PluginInstance::getOutputProperties(VstInt32 index, VstPinProperties* properties)
 {
-   if (index < 2)
+   if (index < 6)
    {
-      sprintf(properties->label, "SURGE"); // , (index & 0xfe) + 1, (index & 0xfe) + 2);
+   	  switch (index)
+   	  {
+   	     case 0:
+            sprintf(properties->label, "Audio Out L");
+            break;
+   	     case 1:
+            sprintf(properties->label, "Audio Out R");
+            break;
+   	     case 2:
+            sprintf(properties->label, "Scene A Out L");
+            break;
+   	     case 3:
+            sprintf(properties->label, "Scene A Out R");
+            break;
+   	     case 4:
+            sprintf(properties->label, "Scene B Out L");
+            break;
+   	     case 5:
+            sprintf(properties->label, "Scene B Out R");
+            break;
+   	  }
       properties->flags = kVstPinIsStereo | kVstPinIsActive;
       return true;
    }
@@ -493,7 +585,10 @@ bool Vst2PluginInstance::getInputProperties(VstInt32 index, VstPinProperties* pr
    bool returnCode = false;
    if (index < 2)
    {
-      sprintf(properties->label, "SURGE in");
+   	  if (index == 0)
+         sprintf(properties->label, "Audio In L");
+      else
+         sprintf(properties->label, "Audio In R");
       properties->flags = kVstPinIsStereo | kVstPinIsActive;
       returnCode = true;
    }
@@ -539,16 +634,30 @@ VstInt32 Vst2PluginInstance::setChunk(void* data, VstInt32 byteSize, bool isPres
    return 1;
 }
 
+/*
+ * These are both now mapped by the parent to the right ID
+ */
 bool Vst2PluginInstance::beginEdit( VstInt32 index )
 {
-   return AudioEffectX::beginEdit(
-       SurgeGUIEditor::applyParameterOffset(_instance->remapExternalApiToInternalId(index)));
+   int id = index;
+   SurgeSynthesizer::ID did;
+   if( SurgeGUIEditor::fromSynthGUITag(_instance, index, did ) )
+   {
+      id = did.getDawSideIndex();
+   }
+   return AudioEffectX::beginEdit(id);
 }
 
 bool Vst2PluginInstance::endEdit( VstInt32 index )
 {
-   return AudioEffectX::endEdit(
-       SurgeGUIEditor::applyParameterOffset(_instance->remapExternalApiToInternalId(index)));
+   int id = index;
+   SurgeSynthesizer::ID did;
+   if( SurgeGUIEditor::fromSynthGUITag(_instance, index, did ) )
+   {
+      id = did.getDawSideIndex();
+   }
+
+   return AudioEffectX::endEdit(id);
 }
 
 bool Vst2PluginInstance::tryInit()
@@ -565,6 +674,7 @@ bool Vst2PluginInstance::tryInit()
    getHostProductString(product);
    VstInt32 hostversion = getHostVendorVersion();
 
+
    try {
       std::unique_ptr<SurgeSynthesizer> synthTmp(new SurgeSynthesizer(this));
       synthTmp->setSamplerate(this->getSampleRate());
@@ -572,9 +682,21 @@ bool Vst2PluginInstance::tryInit()
       std::unique_ptr<SurgeGUIEditor> editorTmp(new SurgeGUIEditor(this, synthTmp.get()));
 
       _instance = synthTmp.release();
+      _instance->audio_processing_active = true;
+
+      _instance->hostProgram = std::string( host ) + " " + product;
+
+      isFruity = false;
+      if( _instance->hostProgram.find( "Fruit" ) != std::string::npos )
+      {
+         isFruity = true;
+      }
+      
+      _instance->setupActivateExtraOutputs();
+      
       editor = editorTmp.release();
    } catch (std::bad_alloc err) {
-      Surge::UserInteractions::promptError(err.what(), "Out of memory");
+      Surge::UserInteractions::promptError(err.what(), "Out of memory!");
       state = DEAD;
       return false;
    } catch (Surge::Error err) {
@@ -583,20 +705,23 @@ bool Vst2PluginInstance::tryInit()
       return false;
    }
 
-   static_cast<SurgeGUIEditor *>(editor)->setZoomCallback( [this](SurgeGUIEditor *e) { handleZoom(e); } );
-   
+   static_cast<SurgeGUIEditor *>(editor)->setZoomCallback( [this](SurgeGUIEditor *e, bool resizeWindow) { redraw(e, resizeWindow); } );
+
    blockpos = 0;
    state = INITIALIZED;
    return true;
 }
 
-void Vst2PluginInstance::handleZoom(SurgeGUIEditor *e)
+void Vst2PluginInstance::redraw(SurgeGUIEditor *e, bool resizeWindow)
 {
-    ERect *vr;
     float fzf = e->getZoomFactor() / 100.0;
-    int newW = WINDOW_SIZE_X * fzf;
-    int newH = WINDOW_SIZE_Y * fzf;
-    sizeWindow( newW, newH );
+    int width = e->getWindowSizeX() * fzf;
+    int heigth = e->getWindowSizeY() * fzf;
+
+    if (resizeWindow)
+    {
+        sizeWindow(width, heigth);
+    }
 
     VSTGUI::CFrame *frame = e->getFrame();
     if(frame)
@@ -607,25 +732,28 @@ void Vst2PluginInstance::handleZoom(SurgeGUIEditor *e)
         ** look at the "oroginWidth" math around in CFrame::setZoom. So rather than let those
         ** drifts accumulate, just reset the size here since we know it
         */
-        frame->setSize(newW, newH);
-        
-        /*
-        ** VST2 has an error which is that the background bitmap doesn't get the frame transform
-        ** applied. Simply look at cviewcontainer::drawBackgroundRect. So we have to force the background
-        ** scale up using a backdoor API.
-        */
-       
-        VSTGUI::CBitmap *bg = frame->getBackground();
-        if(bg != NULL)
-        {
-            CScalableBitmap *sbm = dynamic_cast<CScalableBitmap *>(bg); // dynamic casts are gross but better safe
-            if (sbm)
-            {
-               sbm->setExtraScaleFactor(e->getZoomFactor());
-            }
-        }
+        frame->setSize(width, heigth);
+
+		setExtraScaleFactor(frame->getBackground(), e->getZoomFactor());
 
         frame->setDirty(true);
         frame->invalid();
     }
+}
+
+void Vst2PluginInstance::setExtraScaleFactor(VSTGUI::CBitmap *bg, float zf)
+{
+	if (bg != NULL)
+	{
+		auto sbm = dynamic_cast<CScalableBitmap *>(bg); // dynamic casts are gross but better safe
+		if (sbm)
+		{
+			/*
+			** VSTGUI has an error which is that the background bitmap doesn't get the frame transform
+			** applied. Simply look at cviewcontainer::drawBackgroundRect. So we have to force the background
+			** scale up using a backdoor API.
+			*/
+			sbm->setExtraScaleFactor(zf);
+		}
+	}
 }

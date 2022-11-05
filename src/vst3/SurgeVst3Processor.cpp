@@ -9,6 +9,7 @@
 #include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/base/ustring.h"
+#include "pluginterfaces/vst/vstpresetkeys.h"
 
 #include "CScalableBitmap.h"
 
@@ -17,6 +18,7 @@
 #include <codecvt>
 #include <string.h>
 #include <cwchar>
+#include <stdlib.h>
 
 using namespace Steinberg::Vst;
 
@@ -32,7 +34,7 @@ using namespace Steinberg::Vst;
       return 0;                                                                                    \
    }
 
-SurgeVst3Processor::SurgeVst3Processor() : blockpos(0), surgeInstance()
+SurgeVst3Processor::SurgeVst3Processor() : surgeInstance()
 {
 }
 
@@ -51,27 +53,12 @@ tresult PLUGIN_API SurgeVst3Processor::initialize(FUnknown* context)
       return result;
    }
 
-   disableZoom = false;
-#if WINDOWS
-   Steinberg::FUnknownPtr<Steinberg::Vst::IHostApplication> hostApplication(context);
-   if (hostApplication)
-   {
-      String128 hostName;
-      hostApplication->getName(hostName);
-      char szString[256];
-      size_t nNumCharConverted;
-      wcstombs_s(&nNumCharConverted, szString, 256, hostName, 128);
-      std::string s(szString);
-      disableZoom = false;
-      //if (s == "Cakewalk")
-      //   disableZoom = true;
-   }
-#endif
-
    //---create Audio In/Out busses------
    // we want a SideChain Input and a Stereo Output
    addAudioInput(STR16("SideChain In"), SpeakerArr::kStereo, kAux );
    addAudioOutput(STR16("Stereo Out"), SpeakerArr::kStereo);
+   addAudioOutput(STR16("Scene A Out"), SpeakerArr::kStereo);
+   addAudioOutput(STR16("Scene B Out"), SpeakerArr::kStereo);
 
    //---create Event In/Out busses (1 bus with 16 channels)------
    addEventInput(USTRING("MIDI In"));
@@ -97,6 +84,17 @@ tresult PLUGIN_API SurgeVst3Processor::initialize(FUnknown* context)
 
    midi_controller_0 = getParameterCountWithoutMappings();
    midi_controller_max = midi_controller_0 + n_midi_controller_params;
+
+   Steinberg::FUnknownPtr<Steinberg::Vst::IHostApplication> hostApplication(context);
+   if (hostApplication)
+   {
+      std::wstring_convert<std::codecvt_utf8<TChar>,TChar> cv;
+      String128 hostName;
+      hostApplication->getName(hostName);
+      std::string hn8 = cv.to_bytes(hostName);
+      surgeInstance->hostProgram = hn8;
+   }
+   surgeInstance->setupActivateExtraOutputs();
    
    return kResultOk;
 }
@@ -112,8 +110,8 @@ void SurgeVst3Processor::createSurge()
 
    if (!surgeInstance.get())
    {
-      Surge::UserInteractions::promptError("Unable to allocate SurgeSynthesizer",
-                                           "Out of memory");
+      Surge::UserInteractions::promptError("Unable to allocate SurgeSynthesizer!",
+                                           "Out Of Memory");
 
       return;
    }
@@ -181,18 +179,87 @@ tresult PLUGIN_API SurgeVst3Processor::setState(IBStream* state)
    void* data = malloc(maxsize);
    int32 numBytes = 0;
 
+   /*
+   ** I am leaving a substantial amount of debug code in here since
+   ** the fix we have placed below is tactical at best and we will
+   ** return to this. See #2110
+   */
+#if 0
+   Surge::Debug::openConsole();
+   printf( "------ VST3 SET STATE --------\n" ); 
+   FUnknownPtr<Steinberg::Vst::IStreamAttributes> sa(state);
+   if( ! sa )
+      printf( "No StreamAttributes\n" );
+   auto ga = [sa](const char* a, char *b) {
+                String128 gstring;
+                if( sa && sa->getAttributes()->getString( a, gstring, 128*sizeof(TChar)) == kResultTrue )
+                {
+                   UString128 t(gstring);
+                   char ascii[128];
+                   t.toAscii(b,128);
+                }
+                else
+                {
+                   b[0] = 0;
+                }
+             };
+   char val[256];
+   ga( Steinberg::Vst::PresetAttributes::kPlugInName, val ); printf( "PluginName      : '%s'\n", val );
+   ga( Steinberg::Vst::PresetAttributes::kName, val );       printf( "Name            : '%s'\n", val );
+   ga( Steinberg::Vst::PresetAttributes::kFileName, val );   printf( "FileName        : '%s'\n", val );
+   ga( Steinberg::Vst::PresetAttributes::kStateType, val );  printf( "StateType       : '%s'\n", val );
+#endif
+
+   
    tresult result = state->read(data, maxsize, &numBytes);
+
+   // printf( "numBytes is %d, result is %d\n", numBytes, result );
 
    if (result == kResultOk)
    {
-      surgeInstance->loadRaw(data, numBytes, false);
-      surgeInstance->loadFromDawExtraState();
-      for( auto e : viewsSet )
-          e->loadFromDAWExtraState(surgeInstance.get());
+#if 0      
+      printf( "First 150 bytes of memory chunk\n" );
+      for( auto c=0; c<10; ++c )
+      {
+         char* cd = (char *)data;
+         printf( "%4d  : ", c * 15 );
+         for( auto cc = 0; cc<15; ++cc )
+            printf( "%2x ", (unsigned short)cd[c * 15 + cc ] );
+         printf( "  |  " );
+         for( auto cc = 0; cc<15; ++cc )
+            printf( "%1c", (char)cd[c * 15 + cc ] );
+         printf ("\n");
+      }
+      fflush( stdout );
+#endif
+      bool isSub3 = ( memcmp(data, "sub3", 4 ) == 0 );
 
+      if( isSub3 )
+      {
+         // This is the code which used to load on the VST thread. See #3494
+         /*
+         surgeInstance->loadRaw(data, numBytes, false);
+         surgeInstance->loadFromDawExtraState();
+         for( auto e : viewsSet )
+            e->loadFromDAWExtraState(surgeInstance.get());
+            */
+         surgeInstance->enqueuePatchForLoad(data, numBytes);
+         if( isFirstLoad || ! surgeInstance->audio_processing_active )
+         {
+            // We are just getting started or don't have audio so force this load to resolve off thread
+            surgeInstance->processEnqueuedPatchIfNeeded();
+            isFirstLoad = false;
+         }
+      }
+      else
+      {
+         free(data);
+      }
    }
-
-   free(data);
+   else
+   {
+      free(data);
+   }
 
    return (result == kResultOk) ? kResultOk : kInternalError;
 }
@@ -258,9 +325,11 @@ void SurgeVst3Processor::processEvent(const Event& e)
    }
 
    case Event::kPolyPressureEvent:
-      getSurge()->polyAftertouch(e.polyPressure.channel, e.polyPressure.pitch,
-                                 e.polyPressure.pressure);
+   {
+      char cPres = value01ToMidi7Bit(e.polyPressure.pressure);
+      getSurge()->polyAftertouch(e.polyPressure.channel, e.polyPressure.pitch, cPres);
       break;
+   }
    }
 }
 
@@ -292,11 +361,11 @@ void SurgeVst3Processor::processParameterChanges(int sampleOffset,
                int cont = chancont >> 4;
                
 
-               for (int i = 0; i < numPoints; ++i)
+               for (int iPoint = 0; iPoint < numPoints; ++iPoint)
                {
-                  paramQueue->getPoint(0, offsetSamples, value);
+                  paramQueue->getPoint(iPoint, offsetSamples, value);
                   /*
-                  if( i == 0 ) 
+                  if( iPoint == 0 )
                   {
                      std::cout << "MIDI id=" << id << " chancont=" << chancont << " channel=" << channel << " controller=" << cont << " value=" << value << std::endl;
                   }
@@ -337,20 +406,20 @@ void SurgeVst3Processor::processParameterChanges(int sampleOffset,
             }
             else
             {
-               int id = paramQueue->getParameterId();
-               if ( id < getParameterCountWithoutMappings() )
+               int idE = paramQueue->getParameterId();
+               // In theory the return false should be all we need here
+               SurgeSynthesizer::ID did;
+               if( surgeInstance->fromDAWSideId(idE, did ) )
                {
-                  // Make a choice to use the latest point not the earliest. I think that's right. (I actually
-                  // don't think it matters all that much but hey...)
                   paramQueue->getPoint(numPoints - 1, offsetSamples, value);
 
                   // VST3 wants to send me these events a LOT
-                  if( surgeInstance->getParameter01(id) != value )
-                     surgeInstance->setParameter01(id, value, true);
+                  if( surgeInstance->getParameter01(did) != value )
+                     surgeInstance->setParameter01(did, value, true);
                }
                else
                {
-                  // std::cerr << "Unable to handle parameter " << id << " with npoints " << numPoints << std::endl;
+                  // std::cout << "SKIPPING SETPARM on " << idE << " - probably a midi cc" << std::endl;
                }
             }
          }
@@ -362,7 +431,7 @@ tresult PLUGIN_API SurgeVst3Processor::process(ProcessData& data)
 {
    CHECK_INITIALIZED
 
-   if (data.numInputs == 0 || data.numOutputs == 0)
+   if (data.numOutputs == 0)
    {
       // nothing to do
       return kResultOk;
@@ -370,17 +439,15 @@ tresult PLUGIN_API SurgeVst3Processor::process(ProcessData& data)
 
    _fpuState.set();
 
-   int32 numChannels = 2;
    int32 numSamples = data.numSamples;
 
-   surgeInstance->process_input = data.numInputs != 0;
+   surgeInstance->process_input = data.numInputs != 0 && data.inputs != nullptr;
 
    float** in = surgeInstance->process_input ? data.inputs[0].channelBuffers32 : nullptr;
    float** out = data.outputs[0].channelBuffers32;
 
    int i;
    int numOutputs = data.numOutputs;
-   int numInputs = data.numInputs;
    int noteEventIndex = 0;
    int parameterEventIndex = 0;
 
@@ -391,6 +458,26 @@ tresult PLUGIN_API SurgeVst3Processor::process(ProcessData& data)
    {
       surgeInstance->time_data.ppqPos = data.processContext->projectTimeMusic;
    }
+   if (data.processContext && data.processContext->state & ProcessContext::kTimeSigValid)
+   {
+      surgeInstance->time_data.timeSigNumerator = data.processContext->timeSigNumerator;
+      surgeInstance->time_data.timeSigDenominator = data.processContext->timeSigDenominator;
+   }
+   else
+   {
+      surgeInstance->time_data.timeSigNumerator = 4;
+      surgeInstance->time_data.timeSigDenominator = 4;
+   }
+
+   double tempo = 120;
+   if (data.processContext && data.processContext->state & ProcessContext::kTempoValid)
+   {
+      tempo = data.processContext->tempo;
+   }
+
+   // move clock
+   surgeInstance->time_data.tempo = tempo;
+   surgeInstance->resetStateFromTimeData();
 
    for (i = 0; i < numSamples; i++)
    {
@@ -398,29 +485,8 @@ tresult PLUGIN_API SurgeVst3Processor::process(ProcessData& data)
       {
          if (data.processContext)
          {
-            double tempo = 120;
-
-            if (data.processContext->state & ProcessContext::kTempoValid)
-            {
-               tempo = data.processContext->tempo;
-            }
-
-            // move clock
-            timedata* td = &(surgeInstance->time_data);
-            surgeInstance->time_data.tempo = tempo;
             surgeInstance->time_data.ppqPos +=
                 (double)BLOCK_SIZE * tempo / (60. * data.processContext->sampleRate);
-
-            if (data.processContext->state & ProcessContext::kTimeSigValid)
-            {
-               surgeInstance->time_data.timeSigNumerator = data.processContext->timeSigNumerator;
-               surgeInstance->time_data.timeSigDenominator = data.processContext->timeSigDenominator;
-            }
-            else
-            {
-               surgeInstance->time_data.timeSigNumerator = 4;
-               surgeInstance->time_data.timeSigDenominator = 4;
-            }
          }
 
          processEvents(i, data.inputEvents, noteEventIndex);
@@ -429,7 +495,7 @@ tresult PLUGIN_API SurgeVst3Processor::process(ProcessData& data)
          surgeInstance->process();
       }
 
-      if (surgeInstance->process_input)
+      if (surgeInstance->process_input && in)
       {
          int inp;
          for (inp = 0; inp < N_INPUTS; inp++)
@@ -442,6 +508,28 @@ tresult PLUGIN_API SurgeVst3Processor::process(ProcessData& data)
       for (outp = 0; outp < N_OUTPUTS; outp++)
       {
          out[outp][i] = (float)surgeInstance->output[outp][blockpos];
+      }
+      // TODO: FIX SCENE ASSUMPTION, if we have more scenes, each should get its own additional output eventually!
+      if( numOutputs == 3 )
+      {
+         float** outA = data.outputs[1].channelBuffers32;
+         float** outB = data.outputs[2].channelBuffers32;
+         if (surgeInstance->activateExtraOutputs)
+         {
+            for (int ch = 0; ch < 2; ++ch)
+            {
+               outA[ch][i] = (float)surgeInstance->sceneout[0][ch][blockpos];
+               outB[ch][i] = (float)surgeInstance->sceneout[1][ch][blockpos];
+            }
+         }
+         else
+         {
+            for (int ch = 0; ch < 2; ++ch)
+            {
+               outA[ch][i] = 0.f;
+               outB[ch][i] = 0.f;
+            }
+         }
       }
 
       blockpos++;
@@ -456,6 +544,12 @@ tresult PLUGIN_API SurgeVst3Processor::process(ProcessData& data)
 
    // mark as not silent
    data.outputs[0].silenceFlags = 0;
+   // TODO: FIX SCENE ASSUMPTION
+   if( numOutputs == 3 )
+   {
+      data.outputs[1].silenceFlags = 0;
+      data.outputs[2].silenceFlags = 0;
+   }
 
    _fpuState.restore();
 
@@ -503,49 +597,37 @@ IPlugView* PLUGIN_API SurgeVst3Processor::createView(const char* name)
    if (ConstString(name) == ViewType::kEditor)
    {
       SurgeGUIEditor* editor = new SurgeGUIEditor(this, surgeInstance.get());
+      editor->setZoomCallback( [this](SurgeGUIEditor *e, bool resizeWindow) { redraw(e, resizeWindow); } );
 
-      if (disableZoom)
-         editor->disableZoom();
-
-      editor->setZoomCallback( [this](SurgeGUIEditor *e) { handleZoom(e); } );
-
-      if( haveZoomed )
+      if(lastZoom > 0)
           editor->setZoomFactor(lastZoom);
-      
+
       return editor;
    }
    return nullptr;
 }
 
-tresult SurgeVst3Processor::beginEdit(ParamID id)
+// This is now called with the dawID
+tresult SurgeVst3Processor::beginEdit(ParamID synid)
 {
+   SurgeSynthesizer::ID did;
+
+   if( !SurgeGUIEditor::fromSynthGUITag(surgeInstance.get(), synid, did ))
+      return kResultFalse;
+   char txt[256];
+   surgeInstance->getParameterName(did, txt);
+
+   int id = did.getDawSideId();
+
    if( beginEditGuard.find(id) == beginEditGuard.end() )
    {
        beginEditGuard[id] = 0;
    }
    beginEditGuard[id] ++;
 
-   int mappedId =
-       SurgeGUIEditor::applyParameterOffset(surgeInstance->remapExternalApiToInternalId(id));
-
-   if( id >= metaparam_offset && id <= metaparam_offset + n_midi_controller_params )
-   {
-      mappedId = id;
-   }
-   else if (id >= getParameterCount() || mappedId < 0 )
-   {
-      return kInvalidArgument;
-   }
-   else if( id >= getParameterCountWithoutMappings() )
-   {
-      return kResultOk;
-   }
-
-   
    if( beginEditGuard[id] == 1 )
    {
-      // std::cout << "BeginEdit " << mappedId << std::endl;
-       return Steinberg::Vst::SingleComponentEffect::beginEdit(mappedId);
+       return Steinberg::Vst::SingleComponentEffect::beginEdit(id);
    }
    else
    {
@@ -553,46 +635,29 @@ tresult SurgeVst3Processor::beginEdit(ParamID id)
    }
 }
 
-tresult SurgeVst3Processor::performEdit(ParamID id, Steinberg::Vst::ParamValue valueNormalized)
+tresult SurgeVst3Processor::performEdit(ParamID synid, Steinberg::Vst::ParamValue valueNormalized)
 {
-   int mappedId =
-       SurgeGUIEditor::applyParameterOffset(surgeInstance->remapExternalApiToInternalId(id));
+   SurgeSynthesizer::ID did;
 
-   if( id >= metaparam_offset && id <= metaparam_offset + n_midi_controller_params )
-   {
-      mappedId = id;
-   }
-   else if (id >= getParameterCount() || mappedId < 0 )
-   {
-      return kInvalidArgument;
-   }
-   else if( id >= getParameterCountWithoutMappings() )
-   {
-      return kResultOk;
-   }
+   if( !SurgeGUIEditor::fromSynthGUITag(surgeInstance.get(), synid, did ))
+      return kResultFalse;
 
-   // std::cout << "PerformEdit " << mappedId << std::endl;
-         
-   return Steinberg::Vst::SingleComponentEffect::performEdit(mappedId, valueNormalized);
+   int id = did.getDawSideId();
+
+   char txt[256];
+   surgeInstance->getParameterName(did, txt);
+
+   return Steinberg::Vst::SingleComponentEffect::performEdit(id, valueNormalized);
 }
 
-tresult SurgeVst3Processor::endEdit(ParamID id)
+tresult SurgeVst3Processor::endEdit(ParamID synid)
 {
-   int mappedId =
-       SurgeGUIEditor::applyParameterOffset(surgeInstance->remapExternalApiToInternalId(id));
+   SurgeSynthesizer::ID did;
 
-   if( id >= metaparam_offset && id <= metaparam_offset + n_midi_controller_params )
-   {
-      mappedId = id;
-   }
-   else if (id >= getParameterCount() && mappedId < 0 )
-   {
-      return kInvalidArgument;
-   }
-   else if( id >= getParameterCountWithoutMappings() )
-   {
-      return kResultOk;
-   }
+   if( !SurgeGUIEditor::fromSynthGUITag(surgeInstance.get(), synid, did ))
+      return kResultFalse;
+
+   int id = did.getDawSideId();
 
    auto endcount = -1;
    if( beginEditGuard.find(id) == beginEditGuard.end() )
@@ -610,7 +675,7 @@ tresult SurgeVst3Processor::endEdit(ParamID id)
    if( endcount == 0 )
    {
       // std::cout << "EndEdit " << mappedId << std::endl;
-      return Steinberg::Vst::SingleComponentEffect::endEdit(mappedId);
+      return Steinberg::Vst::SingleComponentEffect::endEdit(id);
    }
    else
    {
@@ -677,13 +742,14 @@ tresult PLUGIN_API SurgeVst3Processor::getParameterInfo(int32 paramIndex, Parame
       info.unitId = 0; // meta.clump;
       
       // FIXME - set the title
+      char nm8[512];
       wchar_t nm[512];
       auto im = paramIndex - midi_controller_0;
       auto ich = im % 16;
       auto icc = im / 16;
       
-      swprintf(nm, 512, L"MIDI CC %d Ch.%d", icc, ich );
-
+      snprintf(nm8, 512, "MIDI CC %d, Channel %d", icc, ich + 1);
+      swprintf(nm, 512, L"%s", nm8);
 #if MAC || LINUX
       std::copy(nm, nm + 128, info.title);
 #else
@@ -693,12 +759,17 @@ tresult PLUGIN_API SurgeVst3Processor::getParameterInfo(int32 paramIndex, Parame
    }
    else
    {
-      int id = surgeInstance->remapExternalApiToInternalId(paramIndex);
-      
+      SurgeSynthesizer::ID did;
+      if( ! surgeInstance->fromDAWSideIndex(paramIndex, did ) )
+      {
+         // std::cout << "UNABLE TO GET by Index" << std::endl;
+         return kInvalidArgument;
+      }
+
       parametermeta meta;
-      surgeInstance->getParameterMeta(id, meta);
+      surgeInstance->getParameterMeta(did, meta);
       
-      info.id = id;
+      info.id = did.getDawSideId();
       
       /*
       ** String128 is a TChar[128] is a char16[128]. On mac, wchar is a char32 so
@@ -708,21 +779,21 @@ tresult PLUGIN_API SurgeVst3Processor::getParameterInfo(int32 paramIndex, Parame
       ** but in the end decided to just copy the bytes
       */
       wchar_t tmpwchar[512];
-      surgeInstance->getParameterNameW(id, tmpwchar);
+      surgeInstance->getParameterNameW(did, tmpwchar);
 #if MAC || LINUX
       std::copy(tmpwchar, tmpwchar + 128, info.title);
 #else
       swprintf(reinterpret_cast<wchar_t *>(info.title), 128, L"%S", tmpwchar);
 #endif   
       
-      surgeInstance->getParameterShortNameW(id, tmpwchar);
+      surgeInstance->getParameterShortNameW(did, tmpwchar);
 #if MAC || LINUX
       std::copy(tmpwchar, tmpwchar + 128, info.shortTitle);
 #else
       swprintf(reinterpret_cast<wchar_t *>(info.shortTitle), 128, L"%S", tmpwchar);
 #endif   
       
-      surgeInstance->getParameterUnitW(id, tmpwchar);
+      surgeInstance->getParameterUnitW(did, tmpwchar);
 #if MAC || LINUX
       std::copy(tmpwchar, tmpwchar + 128, info.units);
 #else
@@ -763,13 +834,16 @@ tresult PLUGIN_API SurgeVst3Processor::getParamStringByValue(ParamID tag,
    }
    
    wchar_t tmpwchar[ 512 ];
-   surgeInstance->getParameterStringW(tag, valueNormalized, tmpwchar);
+   SurgeSynthesizer::ID did;
+   if( surgeInstance->fromDAWSideId(tag, did ))
+   {
+      surgeInstance->getParameterStringW(did, valueNormalized, tmpwchar);
 #if MAC || LINUX
-   std::copy(tmpwchar, tmpwchar+128, ontostring );
+      std::copy(tmpwchar, tmpwchar + 128, ontostring);
 #else
-   swprintf(reinterpret_cast<wchar_t *>(ontostring), 128, L"%S", tmpwchar);
-#endif   
-
+      swprintf(reinterpret_cast<wchar_t*>(ontostring), 128, L"%S", tmpwchar);
+#endif
+   }
    return kResultOk;
 }
 
@@ -794,19 +868,11 @@ ParamValue PLUGIN_API SurgeVst3Processor::normalizedParamToPlain(ParamID tag,
    // std::cout << __LINE__ << " " << __func__ << " " << tag << std::endl;
    ABORT_IF_NOT_INITIALIZED;
 
-   if( tag >= metaparam_offset && tag <= metaparam_offset + num_metaparameters ) 
-   {
-   }
-   else if (tag >= getParameterCount())
-   {
-      return kInvalidArgument;
-   }
-   else if( tag >= getParameterCountWithoutMappings())
-   {
-      return 0;
-   }
-
-   return surgeInstance->normalizedToValue(tag, valueNormalized);
+   ParamValue v = 0;
+   SurgeSynthesizer::ID did;
+   if( surgeInstance->fromDAWSideId(tag, did ))
+      v = surgeInstance->normalizedToValue(did, valueNormalized);
+   return v;
 }
 
 ParamValue PLUGIN_API SurgeVst3Processor::plainParamToNormalized(ParamID tag, ParamValue plainValue)
@@ -814,19 +880,12 @@ ParamValue PLUGIN_API SurgeVst3Processor::plainParamToNormalized(ParamID tag, Pa
    // std::cout << __LINE__ << " " << __func__ << " " << tag << " " << plainValue << std::endl;
    ABORT_IF_NOT_INITIALIZED
 
-   if( tag >= metaparam_offset && tag <= metaparam_offset + num_metaparameters ) 
-   {
-   }
-   else if (tag >= getParameterCountWithoutMappings())
-   {
-       // return kInvalidArgument;
-       // kInvalidArgument is not a ParamValue. In this case just
-       return 0;
-   }
-
-   auto res = surgeInstance->valueToNormalized(tag, plainValue);
+   ParamValue v = 0;
+   SurgeSynthesizer::ID did;
+   if( surgeInstance->fromDAWSideId(tag, did ))
+      v = surgeInstance->valueToNormalized(did, plainValue);
    // std::cout << __LINE__ << " " << __func__ << " " << tag << " " << plainValue << " = " << res << std::endl;
-   return res;
+   return v;
 }
 
 ParamValue PLUGIN_API SurgeVst3Processor::getParamNormalized(ParamID tag)
@@ -834,16 +893,10 @@ ParamValue PLUGIN_API SurgeVst3Processor::getParamNormalized(ParamID tag)
    // std::cout << __LINE__ << " getParamNormalized " << tag << std::endl;
    ABORT_IF_NOT_INITIALIZED;
 
-   if(tag >= getParameterCountWithoutMappings() &&
-      ! ( tag >= metaparam_offset && tag <= metaparam_offset + num_metaparameters )
-      )
-   {
-      // return kInvalidArgument;
-      // kInvalidArgument is not a ParamValue. In this case just
-      return 0;
-   }
-
-   auto res = surgeInstance->getParameter01(tag);
+   ParamValue res = 0;
+   SurgeSynthesizer::ID did;
+   if( surgeInstance->fromDAWSideId(tag, did ))
+      res = surgeInstance->getParameter01(did);
    //std::cout << __LINE__ << " getParamNormalized " << tag << " = " << res << " " << floatBytes(res) << std::endl;
    //stackToInfo();
    return res;
@@ -851,37 +904,18 @@ ParamValue PLUGIN_API SurgeVst3Processor::getParamNormalized(ParamID tag)
 
 tresult PLUGIN_API SurgeVst3Processor::setParamNormalized(ParamID tag, ParamValue value)
 {
-   // std::cout << __LINE__ << " " << __func__ << " " << tag << std::endl;
+   // std::cout << __LINE__ << " " << __func__ << " " << tag << " " << value << std::endl;
    CHECK_INITIALIZED;
 
-   if( tag >= metaparam_offset && tag <= metaparam_offset + num_metaparameters ) 
+   ParamValue v = 0;
+   SurgeSynthesizer::ID did;
+   if( surgeInstance->fromDAWSideId(tag, did ))
    {
-   }
-   else if (tag >= getParameterCount())
-   {
-      return kInvalidArgument;
-   }
-   else if( tag >= getParameterCountWithoutMappings() )
-   {
+      surgeInstance->setParameter01(did, value, true);
       return kResultOk;
    }
 
-   /*
-   ** Priod code had this:
-   **
-   ** surgeInstance->setParameter01(surgeInstance->remapExternalApiToInternalId(tag), value);
-   **
-   ** which remaps "control 0" -> 2048. I think that's right for the VST2 but for the VST3 where
-   ** we are specially dealing with midi controls it is the wrong thing to do; it makes the FX
-   ** control and the control 0 the same. So here just pass the tag on directly.
-   */
-   
-   if( value != surgeInstance->getParameter01(tag) )
-   {
-      surgeInstance->setParameter01(tag, value, true);
-   }
-
-   return kResultOk;
+   return kResultFalse;
 }
 
 SurgeSynthesizer* SurgeVst3Processor::getSurge()
@@ -929,79 +963,116 @@ void SurgeVst3Processor::updateDisplay()
 
 void SurgeVst3Processor::setParameterAutomated(int inputParam, float value)
 {
-   int externalparam;
-   if( inputParam >= metaparam_offset && inputParam <= metaparam_offset + n_midi_controller_params )
-   {
-      externalparam = inputParam;
-   }
-   else
-   {
-      if( inputParam >= getParameterCountWithoutMappings() ) return;
-   
-      externalparam = SurgeGUIEditor::unapplyParameterOffset(
-         surgeInstance->remapExternalApiToInternalId(inputParam));
-   }
-
-   
    /*
    ** This particular choice of implementation is why we have nested
    ** begin/end pairs with the guard. We discovered this clsoing in on
    ** 1.6.2 and decided to leave it and add the guard, but a future version
    ** of ourselves should think deeply about how we want to implement this,
    ** since neither AU or VST2 use this approach
+    *
+    * More over with DAW interface, we get called here with a different ID
+    * structure (the dawID in this case) than the raw GUI beginedit so expand
+    * the implementation
    */
-   beginEdit(externalparam);
-   performEdit(externalparam, value);
-   endEdit(externalparam);
+   if( beginEditGuard.find(inputParam) == beginEditGuard.end() )
+   {
+      Steinberg::Vst::SingleComponentEffect::beginEdit(inputParam);
+      Steinberg::Vst::SingleComponentEffect::performEdit(inputParam, value);
+      Steinberg::Vst::SingleComponentEffect::endEdit(inputParam);
+   }
+   else
+   {
+      Steinberg::Vst::SingleComponentEffect::performEdit(inputParam, value);
+   }
 }
 
-void SurgeVst3Processor::handleZoom(SurgeGUIEditor *e)
+void SurgeVst3Processor::resize(SurgeGUIEditor *e, int width, int heigth)
 {
-    float fzf = e->getZoomFactor() / 100.0;
-    int newW = WINDOW_SIZE_X * fzf;
-    int newH = WINDOW_SIZE_Y * fzf;
+	/*
+	** rather than calling setSize on myself as in vst2, I have to
+	** inform the plugin frame that I have resized with a reference
+	** to a view (which is the editor). This collaborates with
+	** the host to resize once the content is scaled
+	*/
+	Steinberg::IPlugFrame *ipf = e->getIPlugFrame();
+	if (ipf)
+	{
+		Steinberg::ViewRect vr(0, 0, width, heigth);
+		Steinberg::tresult res = ipf->resizeView(e, &vr);
+		if (res != Steinberg::kResultTrue)
+		{
+			// Leaving this here for debug purposes. resizeView() can fail in non-fatal way and zoom reset is just too harsh.
+			/*std::ostringstream oss;
+			oss << "Your host failed to zoom VST3 to " << e->getZoomFactor() << " scale. "
+				<< "Surge will now attempt to reset the zoom level to 100%. You may see several "
+				<< "other error messages in the course of this being resolved.";
+			Surge::UserInteractions::promptError(oss.str(), "VST3 Host Zoom Error" );
+			e->setZoomFactor(100);*/
+		}
+	}
+}
 
-
+void SurgeVst3Processor::redraw(SurgeGUIEditor *e, bool resizeWindow)
+{
     VSTGUI::CFrame *frame = e->getFrame();
     if(frame)
     {
-        frame->setZoom( e->getZoomFactor() / 100.0 );
-        frame->setSize(newW, newH);
-        /*
-        ** rather than calling setSize on myself as in vst2, I have to
-        ** inform the plugin frame that I have resized wiht a reference
-        ** to a view (which is the editor). This collaborates with
-        ** the host to resize once the content is scaled
-        */
-        Steinberg::IPlugFrame *ipf = e->getIPlugFrame();
-        if (ipf)
-        {
-            Steinberg::ViewRect vr( 0, 0, newW, newH );
-            Steinberg::tresult res = ipf->resizeView(e, &vr);
-            if (res != Steinberg::kResultTrue)
-               Surge::UserInteractions::promptError("Your host failed to zoom VST3", "Host Error");
-        }
-            
-        /*
-        ** VSTGUI has an error which is that the background bitmap doesn't get the frame transform
-        ** applied. Simply look at cviewcontainer::drawBackgroundRect. So we have to force the background
-        ** scale up using a backdoor API.
-        */
-        
-        VSTGUI::CBitmap *bg = frame->getBackground();
-        if(bg != NULL)
-        {
-            CScalableBitmap *sbm = dynamic_cast<CScalableBitmap *>(bg); // dynamic casts are gross but better safe
-            if (sbm)
-            {
-                sbm->setExtraScaleFactor( e->getZoomFactor() );
-            }
-        }
-        
+		float fzf = e->getZoomFactor() / 100.0;
+		int width = e->getWindowSizeX() * fzf;
+		int height = e->getWindowSizeY() * fzf;
+
+        frame->setZoom(fzf);
+        frame->setSize(width, height);
+
+		if (resizeWindow)
+		{
+                   if( ! e->hasIdleRun )
+                   {
+                      e->resizeToOnIdle = VSTGUI::CPoint( width, height );
+                   }
+                   else
+                   {
+                      resize(e, width, height);
+                   }
+		}
+
+		setExtraScaleFactor(frame->getBackground(), e->getZoomFactor());
+
         frame->setDirty( true );
         frame->invalid();
-
-        haveZoomed = true;
         lastZoom = e->getZoomFactor();
     }
+}
+
+void SurgeVst3Processor::setExtraScaleFactor(VSTGUI::CBitmap *bg, float zf)
+{
+	if (bg != NULL)
+	{
+		auto sbm = dynamic_cast<CScalableBitmap *>(bg); // dynamic casts are gross but better safe
+		if (sbm)
+		{
+			/*
+			** VSTGUI has an error which is that the background bitmap doesn't get the frame transform
+			** applied. Simply look at cviewcontainer::drawBackgroundRect. So we have to force the background
+			** scale up using a backdoor API.
+			*/
+			sbm->setExtraScaleFactor(zf);
+		}
+	}
+}
+
+void SurgeVst3Processor::uithreadIdleActivity()
+{
+   if (checkNamesEvery++ == 2)
+   {
+      checkNamesEvery = 0;
+      if (std::atomic_exchange(&parameterNameUpdated, false))
+      {
+         auto comph = getComponentHandler();
+         if (comph)
+         {
+            comph->restartComponent(kParamTitlesChanged | kParamValuesChanged);
+         }
+      }
+   }
 }

@@ -1,6 +1,6 @@
 #include "UserDefaults.h"
 #include "UserInteractions.h"
-
+#include "SurgeStorage.h"
 
 #include <string>
 #include <iostream>
@@ -9,20 +9,7 @@
 #include <sstream>
 #include <fstream>
 
-#if LINUX
-#include <experimental/filesystem>
-#elif MAC || TARGET_RACK
-#include <filesystem.h>
-#else
-#include <filesystem>
-#endif
-
-#if WINDOWS && ( _MSC_VER >= 1920 )
-// vs2019
-namespace fs = std::filesystem;
-#else
-namespace fs = std::experimental::filesystem;
-#endif
+#include "filesystem/import.h"
 
 namespace Surge
 {
@@ -50,7 +37,7 @@ bool haveReadDefaultsFile = false;
 
 std::string defaultsFileName(SurgeStorage *storage)
 {
-    std::string fn = storage->userDefaultFilePath + "/SurgeUserDefaults.xml";
+    std::string fn = storage->userDefaultFilePath + PATH_SEPARATOR + "SurgeUserDefaults.xml";
     return fn;
 }
 
@@ -61,7 +48,7 @@ void readDefaultsFile(std::string fn, bool forceRead=false)
         defaultsFileContents.clear();
 
         TiXmlDocument defaultsLoader;
-        defaultsLoader.LoadFile(fn.c_str());
+        defaultsLoader.LoadFile(string_to_path(fn));
         TiXmlElement *e = TINYXML_SAFE_TO_ELEMENT(defaultsLoader.FirstChild("defaults"));
         if(e)
         {
@@ -71,7 +58,7 @@ void readDefaultsFile(std::string fn, bool forceRead=false)
                 std::ostringstream oss;
                 oss << "This version of Surge only reads version 1 defaults. You user defaults version is "
                     << version << ". Defaults ignored";
-                Surge::UserInteractions::promptError(oss.str(), "Defaults File Version Error");
+                Surge::UserInteractions::promptError(oss.str(), "File Version Error");
                 return;
             }
 
@@ -104,7 +91,7 @@ bool storeUserDefaultValue(SurgeStorage *storage, const std::string &key, const 
     ** See SurgeSytnehsizer::savePatch for instance
     ** and so we have to do the same here
     */
-    fs::create_directories(storage->userDefaultFilePath);
+    fs::create_directories(string_to_path(storage->userDefaultFilePath));
 
     
     UserDefaultValue v;
@@ -118,7 +105,7 @@ bool storeUserDefaultValue(SurgeStorage *storage, const std::string &key, const 
     ** For now, the format of our defaults file is so simple that we don't need to mess
     ** around with tinyxml to create it, just to parse it
     */
-    std::ofstream dFile(defaultsFileName(storage));
+    std::ofstream dFile(string_to_path(defaultsFileName(storage)));
     if (!dFile.is_open())
     {
         std::ostringstream emsg;
