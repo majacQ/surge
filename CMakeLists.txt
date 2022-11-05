@@ -6,9 +6,9 @@
 #
 
 cmake_minimum_required(VERSION 3.10)
-set(CMAKE_OSX_DEPLOYMENT_TARGET 10.12 CACHE STRING "Build for 10.12")
+set(CMAKE_OSX_DEPLOYMENT_TARGET 10.9 CACHE STRING "Build for 10.9")
 
-project(Surge VERSION 1.7.0.0 LANGUAGES CXX ASM)
+project(Surge VERSION 1.7.1.0 LANGUAGES CXX ASM)
 message( STATUS "Compiler Version is ${CMAKE_CXX_COMPILER_VERSION}" )
 
 add_custom_target(surge-shared)
@@ -73,14 +73,28 @@ endif()
 
 # CMake Configuration for all platforms
 set(CMAKE_CXX_EXTENSIONS false)
-set(CMAKE_CXX_STANDARD 17)
+if( APPLE )
+  set(CMAKE_CXX_STANDARD 14)
+  set(SURGE_CXX_STD_FLAG cxx_std_14)
+else()
+  set(CMAKE_CXX_STANDARD 17)
+  set(SURGE_CXX_STD_FLAG cxx_std_17)
+endif()
 
 include(CheckCXXSymbolExists)
 CHECK_CXX_SYMBOL_EXISTS(std::filesystem::path::preferred_separator "filesystem" CXX_STD_FS)
 if( CXX_STD_FS )
+  # This is not strictly necessary but since we build with 17 on unix lets check with 17 here
+  if( UNIX AND NOT APPLE )
+    set (CMAKE_REQUIRED_FLAGS "-std=c++17")
+  endif()
   set( FS_COMPILE_DEFINITIONS USE_STD_FILESYSTEM=1 )
+  if( UNIX AND NOT APPLE )
+    set (CMAKE_REQUIRED_FLAGS "")
+  endif()
   message( STATUS "Using std::filesystem" )
 else()
+  # if that check failed we are on one of the wonky gccs in te 7 and 5 family which need to check this with 11 and link stdc++fs
   if( UNIX AND NOT APPLE )
     set (CMAKE_REQUIRED_FLAGS "-std=c++11")
     set (CMAKE_REQUIRED_LIBRARIES "stdc++fs")
@@ -328,6 +342,7 @@ if( APPLE )
     -Werror=dynamic-class-memaccess
     -Werror=undefined-bool-conversion
     -Werror=bitwise-op-parentheses
+    -Werror=pointer-bool-conversion
     )
   set(OS_INCLUDE_DIRECTORIES
     src/mac
@@ -574,7 +589,7 @@ if( BUILD_AU )
     )
   add_dependencies(surge-au-dll surge-shared)
 
-  target_compile_features(surge-au-dll PRIVATE cxx_std_17 )
+  target_compile_features(surge-au-dll PRIVATE ${SURGE_CXX_STD_FLAG} )
 
   target_compile_definitions(surge-au-dll
     PRIVATE
@@ -611,6 +626,8 @@ if( BUILD_AU )
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMAND echo "Packaging up AU component"
     COMMAND ./scripts/macOS/package-au.sh  ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/libsurge-au-dll.dylib ${SURGE_PRODUCT_DIR}
+    COMMAND codesign --force --sign - --timestamp=none ${SURGE_PRODUCT_DIR}/Surge.component/
+    COMMAND codesign -v ${SURGE_PRODUCT_DIR}/Surge.component/
     )
 
 endif()
@@ -634,7 +651,7 @@ if( BUILD_VST3 )
     )
   add_dependencies(surge-vst3-dll  surge-shared)
 
-  target_compile_features(surge-vst3-dll PRIVATE cxx_std_17 )
+  target_compile_features(surge-vst3-dll PRIVATE ${SURGE_CXX_STD_FLAG} )
 
   if( APPLE )
     target_sources(surge-vst3-dll PRIVATE vst3sdk/public.sdk/source/main/macmain.cpp)
@@ -682,6 +699,8 @@ if( BUILD_VST3 )
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMAND echo "Packaging up VST3 component"
       COMMAND ./scripts/macOS/package-vst3.sh ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/libsurge-vst3-dll.dylib ${SURGE_PRODUCT_DIR}
+      COMMAND codesign --force --sign - --timestamp=none ${SURGE_PRODUCT_DIR}/Surge.vst3/
+      COMMAND codesign -v ${SURGE_PRODUCT_DIR}/Surge.vst3/
       )
    elseif( UNIX )
     add_custom_target( Surge-VST3-Packaged ALL )
@@ -733,7 +752,7 @@ if( BUILD_VST2 )
     target_link_options( surge-vst2-dll PUBLIC  "/DEF:..\\resources\\windows-vst2\\surge.def" )
   endif()
 
-  target_compile_features(surge-vst2-dll PRIVATE cxx_std_17 )
+  target_compile_features(surge-vst2-dll PRIVATE ${SURGE_CXX_STD_FLAG} )
 
   target_compile_definitions(surge-vst2-dll
     PRIVATE
@@ -771,6 +790,8 @@ if( BUILD_VST2 )
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMAND echo "Packaging up VST2 component"
       COMMAND ./scripts/macOS/package-vst.sh   ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/libsurge-vst2-dll.dylib ${SURGE_PRODUCT_DIR}
+      COMMAND codesign --force --sign - --timestamp=none ${SURGE_PRODUCT_DIR}/Surge.vst2/
+      COMMAND codesign -v ${SURGE_PRODUCT_DIR}/Surge.vst2/
       )
    endif()
   if( UNIX AND NOT APPLE )
@@ -808,7 +829,7 @@ if( BUILD_LV2 )
     )
   add_dependencies(surge-lv2-dll surge-shared)
 
-  target_compile_features(surge-lv2-dll PRIVATE cxx_std_17 )
+  target_compile_features(surge-lv2-dll PRIVATE ${SURGE_CXX_STD_FLAG} )
 
   target_compile_definitions(surge-lv2-dll
     PRIVATE
@@ -883,7 +904,7 @@ if( BUILD_HEADLESS )
     )
   add_dependencies(surge-headless surge-shared)
 
-  target_compile_features(surge-headless PRIVATE cxx_std_17 )
+  target_compile_features(surge-headless PRIVATE ${SURGE_CXX_STD_FLAG} )
 
   target_compile_definitions(surge-headless
     PRIVATE

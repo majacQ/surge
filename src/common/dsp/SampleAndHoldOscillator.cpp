@@ -186,7 +186,7 @@ void SampleAndHoldOscillator::convolute(int voice, bool FM, bool stereo)
    if (oscdata->p[5].absolute)
    {
       // see the comment in SurgeSuperOscillator in the absolute branch
-      t = storage->note_to_pitch_inv_ignoring_tuning( detune * storage->note_to_pitch_inv_ignoring_tuning( pitch ) * 16 / 0.9443 );
+      t = storage->note_to_pitch_inv_ignoring_tuning( (detune + l_sync.v) * storage->note_to_pitch_inv_ignoring_tuning( pitch ) * 16 / 0.9443 );
       if( t < 0.1 ) t = 0.1;
    }
    else
@@ -197,7 +197,7 @@ void SampleAndHoldOscillator::convolute(int voice, bool FM, bool stereo)
    float wf = l_shape.v * 0.8 * invertcorrelation;
    float wfabs = fabs(wf);
    float smooth = l_smooth.v;
-   float rand11 = (((float)rand() * rcp(RAND_MAX)) * 2.f - 1.f);
+   float rand11 = (((float)rand() * rcp((float)RAND_MAX)) * 2.f - 1.f);
    float randt = rand11 * (1 - wfabs) - wf * last_level[voice];
 
    randt = randt * rcp(1.0f - wfabs);
